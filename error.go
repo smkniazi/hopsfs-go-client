@@ -18,6 +18,7 @@ const (
 	parentNotDirectoryException  = "org.apache.hadoop.fs.ParentNotDirectoryException"
 	UnresolvedLinkException      = "org.apache.hadoop.fs.UnresolvedLinkException"
 	NotReplicatedYetException    = "org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException"
+	illegalArgumentException     = "org.apache.hadoop.HadoopIllegalArgumentException"
 )
 
 // Error represents a remote java exception from an HDFS namenode or datanode.
@@ -71,6 +72,8 @@ func interpretException(err error) error {
 		return syscall.ENOLINK
 	case NotReplicatedYetException:
 		return syscall.EPROTO // Protocol Error
+	case illegalArgumentException:
+		return os.ErrInvalid
 	default:
 		return err
 	}
