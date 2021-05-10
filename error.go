@@ -6,11 +6,10 @@ import (
 )
 
 const (
-	fileNotFoundException        = "java.io.FileNotFoundException"
-	permissionDeniedException    = "org.apache.hadoop.security.AccessControlException"
-	pathIsNotEmptyDirException   = "org.apache.hadoop.fs.PathIsNotEmptyDirectoryException"
-	fileAlreadyExistsException   = "org.apache.hadoop.fs.FileAlreadyExistsException"
-	alreadyBeingCreatedException = "org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException"
+	fileNotFoundException      = "java.io.FileNotFoundException"
+	permissionDeniedException  = "org.apache.hadoop.security.AccessControlException"
+	pathIsNotEmptyDirException = "org.apache.hadoop.fs.PathIsNotEmptyDirectoryException"
+	fileAlreadyExistsException = "org.apache.hadoop.fs.FileAlreadyExistsException"
 )
 
 // Error represents a remote java exception from an HDFS namenode or datanode.
@@ -25,14 +24,6 @@ type Error interface {
 	// Message returns the full error message, complete with java exception
 	// traceback.
 	Message() string
-}
-
-func interpretCreateException(err error) error {
-	if remoteErr, ok := err.(Error); ok && remoteErr.Exception() == alreadyBeingCreatedException {
-		return os.ErrExist
-	}
-
-	return interpretException(err)
 }
 
 func interpretException(err error) error {

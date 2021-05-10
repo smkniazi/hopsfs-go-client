@@ -3,9 +3,10 @@ package hdfs
 import (
 	"os"
 	"path"
+	"strings"
 	"time"
 
-	hdfs "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_hdfs"
+	hdfs "github.com/colinmarc/hdfs/protocol/hadoop_hdfs"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -34,6 +35,10 @@ func (c *Client) getFileInfo(name string) (os.FileInfo, error) {
 
 	err := c.namenode.Execute("getFileInfo", req, resp)
 	if err != nil {
+		//hack to allow git fns
+		if strings.Contains(name, "https") {
+			return nil, os.ErrNotExist
+		}
 		return nil, err
 	}
 
