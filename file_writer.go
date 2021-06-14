@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
-	hdfs "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_hdfs"
-	"github.com/colinmarc/hdfs/v2/internal/transfer"
+	hdfs "github.com/colinmarc/hdfs/protocol/hadoop_hdfs"
+	"github.com/colinmarc/hdfs/transfer"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -66,7 +66,7 @@ func (c *Client) CreateFile(name string, replication int, blockSize int64, perm 
 
 	err := c.namenode.Execute("create", createReq, createResp)
 	if err != nil {
-		return nil, &os.PathError{"create", name, interpretCreateException(err)}
+		return nil, &os.PathError{"create", name, interpretException(err)}
 	}
 
 	return &FileWriter{
