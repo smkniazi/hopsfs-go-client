@@ -112,3 +112,19 @@ func (fi *FileInfo) OwnerGroup() string {
 func (fi *FileInfo) AccessTime() time.Time {
 	return time.Unix(int64(fi.status.GetAccessTime())/1000, 0)
 }
+
+func (fi *FileInfo) Permission() uint32 {
+	return *fi.status.Permission.Perm
+}
+
+func (fi *FileInfo) ModificationTime() uint64 {
+	return fi.status.GetModificationTime()
+}
+
+func (fi *FileInfo) FileId() uint64 {
+	return *fi.status.FileId
+}
+
+func (fi *FileInfo) Length() uint64 {
+	return *fi.status.Length
+}
