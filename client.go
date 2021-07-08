@@ -97,7 +97,7 @@ type ClientOptions struct {
 	// a level of "privacy" is used.
 	DataTransferProtection string
 
-	NoTLS bool
+	TLS bool
 }
 
 // ClientOptionsFromConf attempts to load any relevant configuration options
@@ -189,7 +189,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 
 	dialFun := options.NamenodeDialFunc
 
-	if !options.NoTLS {
+	if options.TLS {
 		dialFun = tlsDialFunction
 	}
 

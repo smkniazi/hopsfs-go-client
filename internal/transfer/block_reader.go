@@ -78,6 +78,17 @@ func (br *BlockReader) Read(b []byte) (int, error) {
 		br.datanodes = newDatanodeFailover(datanodes)
 	}
 
+	if len(br.Block.Data) > 0 {
+		remaining := br.Block.Data[br.Offset:]
+		if len(remaining) == 0 {
+			return 0, io.EOF
+		} else {
+			copied := copy(b, remaining)
+			br.Offset += int64(copied)
+			return copied, nil
+		}
+	}
+
 	// This is the main retry loop.
 	for br.stream != nil || br.datanodes.numRemaining() > 0 {
 		// First, we try to connect. If this fails, we can just skip the datanode
