@@ -289,8 +289,8 @@ func (f *FileWriter) Close() error {
 
 	completeResp := &hdfs.CompleteResponseProto{}
 
-	sleep := time.Duration(1)
-	for i := 0; i < 5; i++ {
+	sleep := time.Duration(250)
+	for i := 0; i < 10; i++ {
 		err := f.client.namenode.Execute("complete", completeReq, completeResp)
 		if err != nil {
 			return &os.PathError{Op: "create", Path: f.name, Err: err}
@@ -299,7 +299,7 @@ func (f *FileWriter) Close() error {
 		closed := *completeResp.Result
 
 		if !closed { //retry after sleep
-			time.Sleep(sleep * time.Second)
+			time.Sleep(sleep * time.Millisecond)
 			sleep *= 2
 			continue
 		} else {
