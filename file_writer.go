@@ -1,6 +1,7 @@
 package hdfs
 
 import (
+	"errors"
 	"io"
 	"os"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/colinmarc/hdfs/v2/internal/transfer"
 	"github.com/golang/protobuf/proto"
 )
+
+const MaxSmallFileSize = 1024 * 64
 
 // A FileWriter represents a writer for an open file in HDFS. It implements
 // Writer and Closer, and can only be used for writes. For reads, see
@@ -19,9 +22,11 @@ type FileWriter struct {
 	replication int
 	blockSize   int64
 
-	blockWriter *transfer.BlockWriter
-	deadline    time.Time
-	closed      bool
+	blockWriter     *transfer.BlockWriter
+	deadline        time.Time
+	closed          bool
+	storeInDB       bool
+	smallFileBuffer []byte
 }
 
 // Create opens a new file in HDFS with the default replication, block size,
@@ -33,9 +38,9 @@ func (c *Client) Create(name string) (*FileWriter, error) {
 	_, err := c.getFileInfo(name)
 	err = interpretException(err)
 	if err == nil {
-		return nil, &os.PathError{"create", name, os.ErrExist}
+		return nil, &os.PathError{Op: "create", Path: name, Err: os.ErrExist}
 	} else if !os.IsNotExist(err) {
-		return nil, &os.PathError{"create", name, err}
+		return nil, &os.PathError{Op: "create", Path: name, Err: err}
 	}
 
 	defaults, err := c.fetchDefaults()
@@ -45,19 +50,24 @@ func (c *Client) Create(name string) (*FileWriter, error) {
 
 	replication := int(defaults.GetReplication())
 	blockSize := int64(defaults.GetBlockSize())
-	return c.CreateFile(name, replication, blockSize, 0644)
+	return c.CreateFile(name, replication, blockSize, 0644, false)
 }
 
 // CreateFile opens a new file in HDFS with the given replication, block size,
 // and permissions, and returns an io.WriteCloser for writing to it. Because of
 // the way that HDFS writes are buffered and acknowledged asynchronously, it is
 // very important that Close is called after all data has been written.
-func (c *Client) CreateFile(name string, replication int, blockSize int64, perm os.FileMode) (*FileWriter, error) {
+func (c *Client) CreateFile(name string, replication int, blockSize int64, perm os.FileMode, overwrite bool) (*FileWriter, error) {
+	createFlag := proto.Uint32(1)
+	if overwrite {
+		createFlag = proto.Uint32(3) // 0x01 for Create and 0x10 for overwrite
+	}
+
 	createReq := &hdfs.CreateRequestProto{
 		Src:          proto.String(name),
 		Masked:       &hdfs.FsPermissionProto{Perm: proto.Uint32(uint32(perm))},
 		ClientName:   proto.String(c.namenode.ClientName),
-		CreateFlag:   proto.Uint32(1),
+		CreateFlag:   createFlag,
 		CreateParent: proto.Bool(false),
 		Replication:  proto.Uint32(uint32(replication)),
 		BlockSize:    proto.Uint64(uint64(blockSize)),
@@ -69,12 +79,21 @@ func (c *Client) CreateFile(name string, replication int, blockSize int64, perm 
 		return nil, &os.PathError{"create", name, interpretCreateException(err)}
 	}
 
-	return &FileWriter{
-		client:      c,
-		name:        name,
-		replication: replication,
-		blockSize:   blockSize,
-	}, nil
+	storedInDB := false
+	if *createResp.Fs.StoragePolicy == uint32(14) {
+		storedInDB = true
+	}
+
+	fw := &FileWriter{
+		client:          c,
+		name:            name,
+		replication:     replication,
+		blockSize:       blockSize,
+		storeInDB:       storedInDB,
+		smallFileBuffer: []byte{},
+	}
+
+	return fw, nil
 }
 
 // Append opens an existing file in HDFS and returns an io.WriteCloser for
@@ -84,7 +103,7 @@ func (c *Client) CreateFile(name string, replication int, blockSize int64, perm 
 func (c *Client) Append(name string) (*FileWriter, error) {
 	_, err := c.getFileInfo(name)
 	if err != nil {
-		return nil, &os.PathError{"append", name, interpretException(err)}
+		return nil, &os.PathError{Op: "append", Path: name, Err: interpretException(err)}
 	}
 
 	appendReq := &hdfs.AppendRequestProto{
@@ -95,14 +114,16 @@ func (c *Client) Append(name string) (*FileWriter, error) {
 
 	err = c.namenode.Execute("append", appendReq, appendResp)
 	if err != nil {
-		return nil, &os.PathError{"append", name, interpretException(err)}
+		return nil, &os.PathError{Op: "append", Path: name, Err: interpretException(err)}
 	}
 
 	f := &FileWriter{
-		client:      c,
-		name:        name,
-		replication: int(appendResp.Stat.GetBlockReplication()),
-		blockSize:   int64(appendResp.Stat.GetBlocksize()),
+		client:          c,
+		name:            name,
+		replication:     int(appendResp.Stat.GetBlockReplication()),
+		blockSize:       int64(appendResp.Stat.GetBlocksize()),
+		storeInDB:       false,
+		smallFileBuffer: []byte{},
 	}
 
 	// This returns nil if there are no blocks (it's an empty file) or if the
@@ -172,6 +193,20 @@ func (f *FileWriter) Write(b []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 
+	if f.storeInDB {
+		f.smallFileBuffer = append(f.smallFileBuffer, b...)
+		if len(f.smallFileBuffer) <= MaxSmallFileSize {
+			return len(b), nil // written successfully
+		} else { // we have exceeded small file limit
+			f.storeInDB = false
+			return f.writeInternal(f.smallFileBuffer)
+		}
+	} else {
+		return f.writeInternal(b)
+	}
+}
+
+func (f *FileWriter) writeInternal(b []byte) (int, error) {
 	if f.blockWriter == nil {
 		err := f.startNewBlock()
 		if err != nil {
@@ -203,6 +238,17 @@ func (f *FileWriter) Flush() error {
 		return io.ErrClosedPipe
 	}
 
+	// if we have buffered some data then we need to write it first
+	if f.storeInDB {
+		if len(f.smallFileBuffer) > 0 {
+			_, err := f.writeInternal(f.smallFileBuffer)
+			if err != nil {
+				return err
+			}
+			f.storeInDB = false
+		}
+	}
+
 	if f.blockWriter != nil {
 		return f.blockWriter.Flush()
 	}
@@ -218,14 +264,16 @@ func (f *FileWriter) Close() error {
 		return io.ErrClosedPipe
 	}
 
-	var lastBlock *hdfs.ExtendedBlockProto
-	if f.blockWriter != nil {
-		lastBlock = f.blockWriter.Block.GetB()
+	var lastBlock *hdfs.ExtendedBlockProto = nil
+	if !f.storeInDB {
+		if f.blockWriter != nil {
+			lastBlock = f.blockWriter.Block.GetB()
 
-		// Close the blockWriter, flushing any buffered packets.
-		err := f.finalizeBlock()
-		if err != nil {
-			return err
+			// Close the blockWriter, flushing any buffered packets.
+			err := f.closeBlock()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -234,14 +282,32 @@ func (f *FileWriter) Close() error {
 		ClientName: proto.String(f.client.namenode.ClientName),
 		Last:       lastBlock,
 	}
-	completeResp := &hdfs.CompleteResponseProto{}
 
-	err := f.client.namenode.Execute("complete", completeReq, completeResp)
-	if err != nil {
-		return &os.PathError{"create", f.name, err}
+	if f.storeInDB {
+		completeReq.Data = f.smallFileBuffer
 	}
 
-	return nil
+	completeResp := &hdfs.CompleteResponseProto{}
+
+	sleep := time.Duration(1)
+	for i := 0; i < 5; i++ {
+		err := f.client.namenode.Execute("complete", completeReq, completeResp)
+		if err != nil {
+			return &os.PathError{Op: "create", Path: f.name, Err: err}
+		}
+
+		closed := *completeResp.Result
+
+		if !closed { //retry after sleep
+			time.Sleep(sleep * time.Second)
+			sleep *= 2
+			continue
+		} else {
+			return nil
+		}
+	}
+
+	return &os.PathError{Op: "create", Path: f.name, Err: errors.New("failed to close the file")}
 }
 
 func (f *FileWriter) startNewBlock() error {
@@ -251,7 +317,7 @@ func (f *FileWriter) startNewBlock() error {
 
 		// TODO: We don't actually need to wait for previous blocks to ack before
 		// continuing.
-		err := f.finalizeBlock()
+		err := f.closeBlock()
 		if err != nil {
 			return err
 		}
@@ -266,7 +332,7 @@ func (f *FileWriter) startNewBlock() error {
 
 	err := f.client.namenode.Execute("addBlock", addBlockReq, addBlockResp)
 	if err != nil {
-		return &os.PathError{"create", f.name, interpretException(err)}
+		return &os.PathError{Op: "create", Path: f.name, Err: interpretException(err)}
 	}
 
 	block := addBlockResp.GetBlock()
@@ -287,22 +353,8 @@ func (f *FileWriter) startNewBlock() error {
 	return f.blockWriter.SetDeadline(f.deadline)
 }
 
-func (f *FileWriter) finalizeBlock() error {
+func (f *FileWriter) closeBlock() error {
 	err := f.blockWriter.Close()
-	if err != nil {
-		return err
-	}
-
-	// Finalize the block on the namenode.
-	lastBlock := f.blockWriter.Block.GetB()
-	lastBlock.NumBytes = proto.Uint64(uint64(f.blockWriter.Offset))
-	updateReq := &hdfs.UpdateBlockForPipelineRequestProto{
-		Block:      lastBlock,
-		ClientName: proto.String(f.client.namenode.ClientName),
-	}
-	updateResp := &hdfs.UpdateBlockForPipelineResponseProto{}
-
-	err = f.client.namenode.Execute("updateBlockForPipeline", updateReq, updateResp)
 	if err != nil {
 		return err
 	}

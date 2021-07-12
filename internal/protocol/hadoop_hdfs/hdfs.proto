@@ -42,6 +42,8 @@ message ExtendedBlockProto {
   required uint64 generationStamp = 3;
   optional uint64 numBytes = 4 [default = 0];  // len does not belong in ebid 
                                                // here for historical reasons
+  optional string cloudBucket = 5 [ default = "" ];
+
 }
 
 /**
@@ -230,7 +232,12 @@ message LocatedBlockProto {
   // striped block related fields
   optional bytes blockIndices = 9; // used for striped block to indicate block index for each storage
   repeated hadoop.common.TokenProto blockTokens = 10; // each internal block has a block token
+
+  // hopsfs
+  optional bytes data = 15;
+  optional uint64 checksum = 16;
 }
+
 
 message DataEncryptionKeyProto {
   required uint32 keyId = 1;
@@ -467,6 +474,7 @@ message BlockProto {
   required uint64 blockId = 1;
   required uint64 genStamp = 2;
   optional uint64 numBytes = 3 [default = 0];
+  optional string cloudBucket = 4 [ default = "" ];
 }
 
 /**

@@ -109,7 +109,7 @@ func NewNamenodeConnection(options NamenodeConnectionOptions) (*NamenodeConnecti
 	clientId := newClientID()
 	c := &NamenodeConnection{
 		ClientID:   clientId,
-		ClientName: "go-hdfs-" + string(clientId),
+		ClientName: "go-hopsfs-" + string(clientId),
 		User:       user,
 
 		kerberosClient:               options.KerberosClient,
