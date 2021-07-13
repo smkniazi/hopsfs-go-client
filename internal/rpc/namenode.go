@@ -2,8 +2,13 @@ package rpc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -42,6 +47,13 @@ type NamenodeConnection struct {
 	kerberosServicePrincipleName string
 	kerberosRealm                string
 
+	// Use SSL
+	TLS bool
+	// if TLS is set then also set the following parameters
+	RootCABundle      string
+	ClientCertificate string
+	ClientKey         string
+
 	dialFunc  func(ctx context.Context, network, addr string) (net.Conn, error)
 	conn      net.Conn
 	host      *namenodeHost
@@ -75,6 +87,12 @@ type NamenodeConnectionOptions struct {
 	// setup (for example: 'nn/_HOST@EXAMPLE.COM'). It is required if
 	// KerberosClient is provided.
 	KerberosServicePrincipleName string
+
+	// Use SSL
+	TLS               bool // if TLS is set then also set the following parameters
+	RootCABundle      string
+	ClientCertificate string
+	ClientKey         string
 }
 
 type namenodeHost struct {
@@ -116,11 +134,20 @@ func NewNamenodeConnection(options NamenodeConnectionOptions) (*NamenodeConnecti
 		kerberosServicePrincipleName: options.KerberosServicePrincipleName,
 		kerberosRealm:                realm,
 
+		TLS:               options.TLS,
+		RootCABundle:      options.RootCABundle,
+		ClientCertificate: options.ClientCertificate,
+		ClientKey:         options.ClientKey,
+
 		dialFunc:  options.DialFunc,
 		hostList:  hostList,
 		transport: &basicTransport{clientID: clientId},
 
 		done: make(chan struct{}),
+	}
+
+	if options.TLS {
+		c.dialFunc = c.tlsDialFunction
 	}
 
 	err := c.resolveConnection()
@@ -312,6 +339,90 @@ func (c *NamenodeConnection) Close() error {
 	}
 
 	return nil
+}
+
+func (c *NamenodeConnection) tlsDialFunction(ctx context.Context, network, address string) (net.Conn, error) {
+	// Load client's certificate(including the intermediate) and private key
+	clientCert, err := tls.LoadX509KeyPair(c.ClientCertificate, c.ClientKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load certificate of the CA who signed server's certificate
+	pemServerCA, err := ioutil.ReadFile(c.RootCABundle)
+	if err != nil {
+		return nil, err
+	}
+
+	certChain := decodePem(pemServerCA)
+
+	config := &tls.Config{}
+
+	config.RootCAs = x509.NewCertPool()
+	for _, cert := range certChain.Certificate {
+		x509Cert, err := x509.ParseCertificate(cert)
+		if err != nil {
+			panic(err)
+		}
+		config.RootCAs.AddCert(x509Cert)
+	}
+
+	config.Certificates = []tls.Certificate{clientCert}
+	config.InsecureSkipVerify = true
+
+	config.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		// If this is the first handshake on a connection, process and
+		// (optionally) verify the server's certificates.
+		certs := make([]*x509.Certificate, len(rawCerts))
+
+		for i, asn1Data := range rawCerts {
+			cert, err := x509.ParseCertificate(asn1Data)
+			if err != nil {
+				panic("Failed to parse certificate from server: " + err.Error())
+			}
+			certs[i] = cert
+		}
+
+		opts := x509.VerifyOptions{
+			Roots:         config.RootCAs,
+			CurrentTime:   time.Now(),
+			DNSName:       "", // <- skip hostname verification
+			Intermediates: x509.NewCertPool(),
+		}
+
+		for i, cert := range certs {
+			if i == 0 {
+				continue
+			}
+			opts.Intermediates.AddCert(cert)
+		}
+		_, err := certs[0].Verify(opts)
+		return err
+	}
+
+	conn, err := tls.Dial(network, address, config)
+
+	if err != nil {
+		log.Println(err)
+		panic("Failed to connect: " + err.Error())
+	}
+	return conn, nil
+}
+
+func decodePem(certInput []byte) tls.Certificate {
+	var cert tls.Certificate
+	certPEMBlock := certInput
+	var certDERBlock *pem.Block
+	for {
+		certDERBlock, certPEMBlock = pem.Decode(certPEMBlock)
+		if certDERBlock == nil {
+			break
+		}
+		if certDERBlock.Type == "CERTIFICATE" {
+			cert.Certificate = append(cert.Certificate, certDERBlock.Bytes)
+		}
+	}
+	return cert
 }
 
 func newRPCRequestHeader(id int32, clientID []byte) *hadoop.RpcRequestHeaderProto {

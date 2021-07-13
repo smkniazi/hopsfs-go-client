@@ -2,19 +2,14 @@ package hdfs
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
 	"os/user"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/colinmarc/hdfs/v2/hadoopconf"
 	hadoop "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_common"
@@ -97,7 +92,12 @@ type ClientOptions struct {
 	// a level of "privacy" is used.
 	DataTransferProtection string
 
+	// Use SSL
 	TLS bool
+	// if TLS is set then also set the following parameters
+	RootCABundle      string
+	ClientCertificate string
+	ClientKey         string
 }
 
 // ClientOptionsFromConf attempts to load any relevant configuration options
@@ -190,7 +190,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 	dialFun := options.NamenodeDialFunc
 
 	if options.TLS {
-		dialFun = tlsDialFunction
+		// make sure that the required paremeters are valid
+		options.checkCertificates()
 	}
 
 	namenode, err := rpc.NewNamenodeConnection(
@@ -200,6 +201,10 @@ func NewClient(options ClientOptions) (*Client, error) {
 			DialFunc:                     dialFun,
 			KerberosClient:               options.KerberosClient,
 			KerberosServicePrincipleName: options.KerberosServicePrincipleName,
+			TLS:                          options.TLS,
+			RootCABundle:                 options.RootCABundle,
+			ClientCertificate:            options.ClientCertificate,
+			ClientKey:                    options.ClientKey,
 		},
 	)
 
@@ -208,6 +213,25 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}
 
 	return &Client{namenode: namenode, options: options}, nil
+}
+
+func (options ClientOptions) checkCertificates() error {
+	_, err := os.Stat(options.RootCABundle)
+	if err != nil {
+		return errors.New("Unable to access root ca certificate. Path: " + options.RootCABundle)
+	}
+
+	_, err = os.Stat(options.ClientCertificate)
+	if err != nil {
+		return errors.New("Unable to access client certificate. Path: " + options.ClientCertificate)
+	}
+
+	_, err = os.Stat(options.ClientKey)
+	if err != nil {
+		return errors.New("Unable to access client key. Path: " + options.ClientKey)
+	}
+
+	return nil
 }
 
 // New returns Client connected to the namenode(s) specified by address, or an
@@ -378,94 +402,4 @@ func (c *Client) wrapDatanodeDial(dc dialContext, token *hadoop.TokenProto) (dia
 // Close terminates all underlying socket connections to remote server.
 func (c *Client) Close() error {
 	return c.namenode.Close()
-}
-
-func tlsDialFunction(ctx context.Context, network, address string) (net.Conn, error) {
-	//errors in these environmental variables will be handled when we will try to read the files
-	caCert := os.Getenv("ROOT_CA_BUNDLE")
-	clientCertificate := os.Getenv("CLIENT_CERTIFICATES_BUNDLE")
-	clientKey := os.Getenv("CLIENT_KEY")
-
-	// Load client's certificate(including the intermediate) and private key
-	clientCert, err := tls.LoadX509KeyPair(clientCertificate, clientKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// Load certificate of the CA who signed server's certificate
-	pemServerCA, err := ioutil.ReadFile(caCert)
-	if err != nil {
-		return nil, err
-	}
-
-	certChain := decodePem(pemServerCA)
-
-	config := &tls.Config{}
-
-	config.RootCAs = x509.NewCertPool()
-	for _, cert := range certChain.Certificate {
-		x509Cert, err := x509.ParseCertificate(cert)
-		if err != nil {
-			panic(err)
-		}
-		config.RootCAs.AddCert(x509Cert)
-	}
-
-	config.Certificates = []tls.Certificate{clientCert}
-	config.InsecureSkipVerify = true
-
-	config.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-		log.Println("I received back certificates")
-		// If this is the first handshake on a connection, process and
-		// (optionally) verify the server's certificates.
-		certs := make([]*x509.Certificate, len(rawCerts))
-
-		for i, asn1Data := range rawCerts {
-			cert, err := x509.ParseCertificate(asn1Data)
-			if err != nil {
-				panic("Failed to parse certificate from server: " + err.Error())
-			}
-			certs[i] = cert
-		}
-
-		opts := x509.VerifyOptions{
-			Roots:         config.RootCAs,
-			CurrentTime:   time.Now(),
-			DNSName:       "", // <- skip hostname verification
-			Intermediates: x509.NewCertPool(),
-		}
-
-		for i, cert := range certs {
-			if i == 0 {
-				continue
-			}
-			opts.Intermediates.AddCert(cert)
-		}
-		_, err := certs[0].Verify(opts)
-		return err
-	}
-
-	conn, err := tls.Dial(network, address, config)
-
-	if err != nil {
-		log.Println(err)
-		panic("Failed to connect: " + err.Error())
-	}
-	return conn, nil
-}
-
-func decodePem(certInput []byte) tls.Certificate {
-	var cert tls.Certificate
-	certPEMBlock := certInput
-	var certDERBlock *pem.Block
-	for {
-		certDERBlock, certPEMBlock = pem.Decode(certPEMBlock)
-		if certDERBlock == nil {
-			break
-		}
-		if certDERBlock.Type == "CERTIFICATE" {
-			cert.Certificate = append(cert.Certificate, certDERBlock.Bytes)
-		}
-	}
-	return cert
 }
