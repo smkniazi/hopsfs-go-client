@@ -3,8 +3,10 @@ package hdfs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
 	"os/user"
@@ -31,8 +33,9 @@ const (
 // automatically maintain leases for any open files, preventing other clients
 // from modifying them, until Close is called.
 type Client struct {
-	namenode *rpc.NamenodeConnection
-	options  ClientOptions
+	namenode       *rpc.NamenodeConnection
+	leaderNamenode *rpc.NamenodeConnection
+	options        ClientOptions
 
 	defaults      *hdfs.FsServerDefaultsProto
 	encryptionKey *hdfs.DataEncryptionKeyProto
@@ -178,6 +181,36 @@ func ClientOptionsFromConf(conf hadoopconf.HadoopConf) ClientOptions {
 // NewClient returns a connected Client for the given options, or an error if
 // the client could not be created.
 func NewClient(options ClientOptions) (*Client, error) {
+	client, err := newClientInt(options, options.Addresses, options.Addresses[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// we are now connected to a NN. Now get the list of all the alive NNs
+	// and connect to a random NN for better load balancing.
+	nns, err := client.getActiveNNs()
+	if err != nil || len(nns) == 1 {
+		// hmm, dont be too fussy, just return the previously connected NN
+		return client, nil
+	}
+
+	randNNi := rand.Intn(len(nns))
+	nnAddress := fmt.Sprintf("%s:%d", nns[randNNi].GetRpcIpAddress(), nns[randNNi].GetRpcPort())
+	leaderNNAddress := fmt.Sprintf("%s:%d", nns[0].GetRpcIpAddress(), nns[0].GetRpcPort())
+	newOptions := options
+	newOptions.Addresses = []string{string(nnAddress)}
+
+	newClient, err := newClientInt(newOptions, []string{nnAddress}, leaderNNAddress)
+	if err != nil {
+		// hmm, dont be too fussy, just return the previously connected NN
+		return client, nil
+	} else {
+		client.Close()
+		return newClient, nil
+	}
+}
+
+func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress string) (*Client, error) {
 	var err error
 	if options.KerberosClient != nil && options.KerberosClient.Credentials == nil {
 		return nil, errors.New("kerberos enabled, but kerberos client is missing credentials")
@@ -194,25 +227,35 @@ func NewClient(options ClientOptions) (*Client, error) {
 		options.checkCertificates()
 	}
 
-	namenode, err := rpc.NewNamenodeConnection(
-		rpc.NamenodeConnectionOptions{
-			Addresses:                    options.Addresses,
-			User:                         options.User,
-			DialFunc:                     dialFun,
-			KerberosClient:               options.KerberosClient,
-			KerberosServicePrincipleName: options.KerberosServicePrincipleName,
-			TLS:                          options.TLS,
-			RootCABundle:                 options.RootCABundle,
-			ClientCertificate:            options.ClientCertificate,
-			ClientKey:                    options.ClientKey,
-		},
-	)
+	nnConnectionOptions := rpc.NamenodeConnectionOptions{
+		Addresses:                    nnAddresses,
+		User:                         options.User,
+		DialFunc:                     dialFun,
+		KerberosClient:               options.KerberosClient,
+		KerberosServicePrincipleName: options.KerberosServicePrincipleName,
+		TLS:                          options.TLS,
+		RootCABundle:                 options.RootCABundle,
+		ClientCertificate:            options.ClientCertificate,
+		ClientKey:                    options.ClientKey,
+	}
+
+	namenodeConn, err := rpc.NewNamenodeConnection(nnConnectionOptions)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{namenode: namenode, options: options}, nil
+	var leaderConn *rpc.NamenodeConnection = namenodeConn
+	if leaderAddress != "" {
+		leaderNNConnectionOptions := nnConnectionOptions
+		leaderNNConnectionOptions.Addresses = []string{leaderAddress}
+		leaderConn, err = rpc.NewNamenodeConnection(leaderNNConnectionOptions)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options}, nil
 }
 
 func (options ClientOptions) checkCertificates() error {
@@ -401,5 +444,14 @@ func (c *Client) wrapDatanodeDial(dc dialContext, token *hadoop.TokenProto) (dia
 
 // Close terminates all underlying socket connections to remote server.
 func (c *Client) Close() error {
-	return c.namenode.Close()
+	err := c.namenode.Close()
+	if err != nil {
+		return err
+	}
+
+	err = c.leaderNamenode.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }
