@@ -426,11 +426,13 @@ func decodePem(certInput []byte) tls.Certificate {
 }
 
 func newRPCRequestHeader(id int32, clientID []byte) *hadoop.RpcRequestHeaderProto {
+	epoch := getRpcEpochSec()
 	return &hadoop.RpcRequestHeaderProto{
 		RpcKind:  hadoop.RpcKindProto_RPC_PROTOCOL_BUFFER.Enum(),
 		RpcOp:    hadoop.RpcRequestHeaderProto_RPC_FINAL_PACKET.Enum(),
 		CallId:   proto.Int32(id),
 		ClientId: clientID,
+		Epoch:    &epoch,
 	}
 }
 
@@ -452,5 +454,24 @@ func newConnectionContext(user, kerberosRealm string) *hadoop.IpcConnectionConte
 			EffectiveUser: proto.String(user),
 		},
 		Protocol: proto.String(protocolClass),
+	}
+}
+
+var serverReportedEpoch int64 = 0
+var epochReportTime time.Time = time.Now()
+
+func SetEpoch(reportTime time.Time, epoch int64) {
+	serverReportedEpoch = epoch
+	epochReportTime = reportTime
+}
+
+func getRpcEpochSec() int64 {
+	if serverReportedEpoch == 0 {
+		return 0
+	} else {
+		timePassed := time.Since(epochReportTime).Milliseconds()
+		currentTime := serverReportedEpoch + timePassed
+		epoch := currentTime / 1000
+		return epoch
 	}
 }

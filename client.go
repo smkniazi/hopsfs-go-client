@@ -255,7 +255,12 @@ func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress str
 		}
 	}
 
-	return &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options}, nil
+	c := &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options}
+
+	// set epoch
+	c.setEpoch()
+
+	return c, nil
 }
 
 func (options ClientOptions) checkCertificates() error {
