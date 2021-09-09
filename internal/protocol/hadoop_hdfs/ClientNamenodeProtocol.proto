@@ -698,6 +698,13 @@ message ActiveNamenodeListResponseProto {
   repeated ActiveNodeProto namenodes = 1;
 }
 
+message GetEpochMSRequestProto {
+}
+
+message GetEpochMSResponseProto {
+  required int64 epoch = 1;
+}
+
 message CreateSnapshotRequestProto {
   required string snapshotRoot = 1;
   optional string snapshotName = 2;
@@ -921,4 +928,6 @@ service ClientNamenodeProtocol {
       returns(GetErasureCodingPolicyResponseProto);
   rpc getQuotaUsage(GetQuotaUsageRequestProto)
       returns(GetQuotaUsageResponseProto);
+  rpc getNNEpochMS(GetEpochMSRequestProto)
+      returns (GetEpochMSResponseProto);
 }
