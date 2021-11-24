@@ -22,7 +22,7 @@ func (c *Client) Rename(oldpath, newpath string) error {
 	}
 	resp := &hdfs.Rename2ResponseProto{}
 
-	err = c.namenode.Execute("rename2", req, resp)
+	err = c.leaderNamenode.Execute("rename2", req, resp)
 	if err != nil {
 		return &os.PathError{"rename", oldpath, interpretException(err)}
 	}
