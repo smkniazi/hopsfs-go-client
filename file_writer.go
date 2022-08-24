@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	hdfs "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_hdfs"
@@ -260,6 +261,33 @@ func (f *FileWriter) Flush() error {
 // for acknowledgements from the datanodes. It is important that Close is called
 // after all data has been written.
 func (f *FileWriter) Close() error {
+	err := f.closeInt()
+	if err != nil {
+		// if the close failed due to the DB throwing
+		// OutOfExtents Exception then we retry the close
+		// operation after writing the data to disk
+
+		if f.storeInDB && len(f.smallFileBuffer) > 0 &&
+			strings.Contains(err.Error(), "OutOfDBExtentsException") {
+
+			_, err := f.writeInternal(f.smallFileBuffer)
+			if err != nil {
+				return err
+			}
+			f.storeInDB = false
+
+			err = f.closeInt()
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *FileWriter) closeInt() error {
 	if f.closed {
 		return io.ErrClosedPipe
 	}
