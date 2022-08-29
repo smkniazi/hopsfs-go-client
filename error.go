@@ -17,6 +17,7 @@ const (
 	nSQuotaExceededException     = "org.apache.hadoop.hdfs.protocol.NSQuotaExceededException"
 	parentNotDirectoryException  = "org.apache.hadoop.fs.ParentNotDirectoryException"
 	UnresolvedLinkException      = "org.apache.hadoop.fs.UnresolvedLinkException"
+	NotReplicatedYetException    = "org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException"
 )
 
 // Error represents a remote java exception from an HDFS namenode or datanode.
@@ -68,6 +69,8 @@ func interpretException(err error) error {
 		return syscall.ENOENT
 	case UnresolvedLinkException:
 		return syscall.ENOLINK
+	case NotReplicatedYetException:
+		return syscall.EPROTO // Protocol Error
 	default:
 		return err
 	}

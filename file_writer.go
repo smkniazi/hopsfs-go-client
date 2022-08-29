@@ -351,14 +351,7 @@ func (f *FileWriter) startNewBlock() error {
 		}
 	}
 
-	addBlockReq := &hdfs.AddBlockRequestProto{
-		Src:        proto.String(f.name),
-		ClientName: proto.String(f.client.namenode.ClientName),
-		Previous:   previous,
-	}
-	addBlockResp := &hdfs.AddBlockResponseProto{}
-
-	err := f.client.namenode.Execute("addBlock", addBlockReq, addBlockResp)
+	addBlockResp, err := f.addBlockWithRetry(previous)
 	if err != nil {
 		return &os.PathError{Op: "create", Path: f.name, Err: interpretException(err)}
 	}
@@ -379,6 +372,29 @@ func (f *FileWriter) startNewBlock() error {
 	}
 
 	return f.blockWriter.SetDeadline(f.deadline)
+}
+
+func (f *FileWriter) addBlockWithRetry(previous *hdfs.ExtendedBlockProto) (*hdfs.AddBlockResponseProto, error) {
+	addBlockReq := &hdfs.AddBlockRequestProto{
+		Src:        proto.String(f.name),
+		ClientName: proto.String(f.client.namenode.ClientName),
+		Previous:   previous,
+	}
+
+	addBlockResp := &hdfs.AddBlockResponseProto{}
+	initDelay := time.Duration(400)
+	var err error = nil
+
+	for i := 0; i < 8; i++ { // 8 --> ~9.3 min
+		err = f.client.namenode.Execute("addBlock", addBlockReq, addBlockResp)
+		if err != nil && strings.Contains(err.Error(), "NotReplicatedYetException") {
+			time.Sleep(initDelay * time.Millisecond)
+			initDelay *= 2
+		} else {
+			break
+		}
+	}
+	return addBlockResp, err
 }
 
 func (f *FileWriter) closeBlock() error {
