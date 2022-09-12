@@ -1082,10 +1082,8 @@ service ClientNamenodeProtocol {
       returns(GetErasureCodingCodecsResponseProto);
   rpc getQuotaUsage(GetQuotaUsageRequestProto)
       returns(GetQuotaUsageResponseProto);
-<<<<<<< HEAD
   rpc getNNEpochMS(GetEpochMSRequestProto)
       returns (GetEpochMSResponseProto);
-=======
   rpc listOpenFiles(ListOpenFilesRequestProto)
       returns(ListOpenFilesResponseProto);
   rpc msync(MsyncRequestProto)
@@ -1094,5 +1092,4 @@ service ClientNamenodeProtocol {
       returns(SatisfyStoragePolicyResponseProto);
   rpc getHAServiceState(HAServiceStateRequestProto)
       returns(HAServiceStateResponseProto);
->>>>>>> c67abc1
 }

@@ -281,14 +281,11 @@ message LocatedBlockProto {
   optional uint64 checksum = 16;
 }
 
-<<<<<<< HEAD
-=======
 message BatchedListingKeyProto {
   required bytes checksum = 1;
   required uint32 pathIndex = 2;
   required bytes startAfter = 3;
 }
->>>>>>> c67abc1
 
 message DataEncryptionKeyProto {
   required uint32 keyId = 1;
