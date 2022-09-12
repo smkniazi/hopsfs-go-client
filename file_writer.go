@@ -36,8 +36,6 @@ type FileWriter struct {
 	blockWriter     *transfer.BlockWriter
 	deadline        time.Time
 	closed          bool
-	blockWriter     *transfer.BlockWriter
-	deadline        time.Time
 	storeInDB       bool
 	smallFileBuffer []byte
 }
