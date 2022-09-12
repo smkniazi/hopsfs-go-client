@@ -2,7 +2,6 @@ package hdfs
 
 import (
 	"errors"
-	"io"
 	"os"
 	"strings"
 	"time"
@@ -35,7 +34,6 @@ type FileWriter struct {
 
 	blockWriter     *transfer.BlockWriter
 	deadline        time.Time
-	closed          bool
 	storeInDB       bool
 	smallFileBuffer []byte
 }
@@ -298,10 +296,6 @@ func (f *FileWriter) Close() error {
 }
 
 func (f *FileWriter) closeInt() error {
-	if f.closed {
-		return io.ErrClosedPipe
-	}
-
 	var lastBlock *hdfs.ExtendedBlockProto = nil
 	if !f.storeInDB {
 		if f.blockWriter != nil {
