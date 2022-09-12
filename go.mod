@@ -5,6 +5,7 @@ require (
 	github.com/jcmturner/gokrb5/v8 v8.4.2
 	github.com/pborman/getopt v1.1.0
 	github.com/stretchr/testify v1.7.0
+	google.golang.org/protobuf v1.26.0-rc.1
 )
 
 require (
@@ -18,7 +19,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/crypto v0.0.0-20201112155050-0c6587e931a9 // indirect
 	golang.org/x/net v0.0.0-20200114155413-6afb5195e5aa // indirect
-	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
 	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
 )
 
