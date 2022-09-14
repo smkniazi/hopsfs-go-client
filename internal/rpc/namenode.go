@@ -125,7 +125,7 @@ func NewNamenodeConnection(options NamenodeConnectionOptions) (*NamenodeConnecti
 	clientId := newClientID()
 	c := &NamenodeConnection{
 		ClientID:   clientId,
-		ClientName: "go-hopsfs-" + string(clientId),
+		ClientName: "GO-HopsFS-" + string(clientId),
 		User:       user,
 
 		kerberosClient:               options.KerberosClient,

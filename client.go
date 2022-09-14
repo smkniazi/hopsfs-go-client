@@ -191,7 +191,7 @@ func ClientOptionsFromConf(conf hadoopconf.HadoopConf) ClientOptions {
 // NewClient returns a connected Client for the given options, or an error if
 // the client could not be created.
 func NewClient(options ClientOptions) (*Client, error) {
-	client, err := newClientInt(options, options.Addresses, options.Addresses[0])
+	client, err := newClientInt(options, options.Addresses, "")
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	// and connect to a random NN for better load balancing.
 	nns, err := client.getActiveNNs()
 	if err != nil || len(nns) == 1 {
-		// hmm, dont be too fussy, just return the previously connected NN
+		// One NN which should also be the leader
 		return client, nil
 	}
 
@@ -210,14 +210,13 @@ func NewClient(options ClientOptions) (*Client, error) {
 	newOptions := options
 	newOptions.Addresses = []string{string(nnAddress)}
 
+	client.Close()
 	newClient, err := newClientInt(newOptions, []string{nnAddress}, leaderNNAddress)
 	if err != nil {
-		// hmm, dont be too fussy, just return the previously connected NN
-		return client, nil
-	} else {
-		client.Close()
-		return newClient, nil
+		return nil, err
 	}
+
+	return newClient, nil
 }
 
 func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress string) (*Client, error) {

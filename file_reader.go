@@ -99,6 +99,10 @@ func (f *FileReader) Checksum() ([]byte, error) {
 	checksum := md5.New()
 
 	for _, block := range f.blocks {
+		if len(block.Data) > 0 {
+			return nil, fmt.Errorf("Checksum not supported for files stored in DB.")
+		}
+
 		d, err := f.client.wrapDatanodeDial(f.client.options.DatanodeDialFunc,
 			block.GetBlockToken())
 		if err != nil {

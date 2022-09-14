@@ -142,6 +142,13 @@ func (c *Client) Append(name string) (*FileWriter, error) {
 		return f, nil
 	}
 
+	//handling appending to phantom block
+	if len(appendResp.GetBlock().Data) > 0 {
+		f.storeInDB = true
+		f.smallFileBuffer = appendResp.GetBlock().Data
+		return f, nil
+	}
+
 	dialFunc, err := f.client.wrapDatanodeDial(
 		f.client.options.DatanodeDialFunc,
 		block.GetBlockToken())
@@ -204,7 +211,9 @@ func (f *FileWriter) Write(b []byte) (int, error) {
 			return len(b), nil // written successfully
 		} else { // we have exceeded small file limit
 			f.storeInDB = false
-			return f.writeInternal(f.smallFileBuffer)
+			_, err := f.writeInternal(f.smallFileBuffer)
+			// we already acked for some data in the previous return statements
+			return len(b), err
 		}
 	} else {
 		return f.writeInternal(b)

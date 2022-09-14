@@ -477,8 +477,9 @@ func TestFileWriteDeadlineBefore(t *testing.T) {
 	writer, err := client.Create("/_test/create/8.txt")
 	require.NoError(t, err)
 
+	buff := make([]byte, 1024*64+1)
 	writer.SetDeadline(time.Now())
-	_, err = writer.Write([]byte("foo"))
+	_, err = writer.Write(buff)
 	assert.Error(t, err)
 }
 
@@ -528,6 +529,7 @@ func TestFileAppendDeadlineBefore(t *testing.T) {
 	require.NoError(t, err)
 
 	writer.SetDeadline(time.Now())
-	_, err = writer.Write([]byte("foo\n"))
+	bytes := make([]byte, 1024*1024) // to avoid buffering for small files
+	_, err = writer.Write(bytes)
 	assert.Error(t, err)
 }
