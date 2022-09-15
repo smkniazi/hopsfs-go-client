@@ -2,17 +2,25 @@ package hdfs
 
 import (
 	"errors"
-	"io"
 	"os"
 	"strings"
 	"time"
 
 	hdfs "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_hdfs"
 	"github.com/colinmarc/hdfs/v2/internal/transfer"
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 const MaxSmallFileSize = 1024 * 64
+
+var ErrReplicating = errors.New("replication in progress")
+
+// IsErrReplicating returns true if the passed error is an os.PathError wrapping
+// ErrReplicating.
+func IsErrReplicating(err error) bool {
+	pe, ok := err.(*os.PathError)
+	return ok && pe.Err == ErrReplicating
+}
 
 // A FileWriter represents a writer for an open file in HDFS. It implements
 // Writer and Closer, and can only be used for writes. For reads, see
@@ -22,10 +30,10 @@ type FileWriter struct {
 	name        string
 	replication int
 	blockSize   int64
+	fileId      *uint64
 
 	blockWriter     *transfer.BlockWriter
 	deadline        time.Time
-	closed          bool
 	storeInDB       bool
 	smallFileBuffer []byte
 }
@@ -85,16 +93,15 @@ func (c *Client) CreateFile(name string, replication int, blockSize int64, perm 
 		storedInDB = true
 	}
 
-	fw := &FileWriter{
+	return &FileWriter{
 		client:          c,
 		name:            name,
 		replication:     replication,
 		blockSize:       blockSize,
+		fileId:          createResp.Fs.FileId,
 		storeInDB:       storedInDB,
 		smallFileBuffer: []byte{},
-	}
-
-	return fw, nil
+	}, nil
 }
 
 // Append opens an existing file in HDFS and returns an io.WriteCloser for
@@ -123,6 +130,7 @@ func (c *Client) Append(name string) (*FileWriter, error) {
 		name:            name,
 		replication:     int(appendResp.Stat.GetBlockReplication()),
 		blockSize:       int64(appendResp.Stat.GetBlocksize()),
+		fileId:          appendResp.Stat.FileId,
 		storeInDB:       false,
 		smallFileBuffer: []byte{},
 	}
@@ -131,6 +139,13 @@ func (c *Client) Append(name string) (*FileWriter, error) {
 	// last block is full (so we have to start a fresh block).
 	block := appendResp.GetBlock()
 	if block == nil {
+		return f, nil
+	}
+
+	//handling appending to phantom block
+	if len(appendResp.GetBlock().Data) > 0 {
+		f.storeInDB = true
+		f.smallFileBuffer = appendResp.GetBlock().Data
 		return f, nil
 	}
 
@@ -190,17 +205,15 @@ func (f *FileWriter) SetDeadline(t time.Time) error {
 // of this, it is important that Close is called after all data has been
 // written.
 func (f *FileWriter) Write(b []byte) (int, error) {
-	if f.closed {
-		return 0, io.ErrClosedPipe
-	}
-
 	if f.storeInDB {
 		f.smallFileBuffer = append(f.smallFileBuffer, b...)
 		if len(f.smallFileBuffer) <= MaxSmallFileSize {
 			return len(b), nil // written successfully
 		} else { // we have exceeded small file limit
 			f.storeInDB = false
-			return f.writeInternal(f.smallFileBuffer)
+			_, err := f.writeInternal(f.smallFileBuffer)
+			// we already acked for some data in the previous return statements
+			return len(b), err
 		}
 	} else {
 		return f.writeInternal(b)
@@ -235,10 +248,6 @@ func (f *FileWriter) writeInternal(b []byte) (int, error) {
 // a call to Flush, it is still necessary to call Close once all data has been
 // written.
 func (f *FileWriter) Flush() error {
-	if f.closed {
-		return io.ErrClosedPipe
-	}
-
 	// if we have buffered some data then we need to write it first
 	if f.storeInDB {
 		if len(f.smallFileBuffer) > 0 {
@@ -260,6 +269,14 @@ func (f *FileWriter) Flush() error {
 // Close closes the file, writing any remaining data out to disk and waiting
 // for acknowledgements from the datanodes. It is important that Close is called
 // after all data has been written.
+//
+// If the datanodes have acknowledged all writes but not yet to the namenode,
+// it can return ErrReplicating (wrapped in an os.PathError). This indicates
+// that all data has been written, but the lease is still open for the file.
+// It is safe in this case to either ignore the error (and let the lease expire
+// on its own) or to call Close multiple times until it completes without an
+// error. The Java client, for context, always chooses to retry, with
+// exponential backoff.
 func (f *FileWriter) Close() error {
 	err := f.closeInt()
 	if err != nil {
@@ -288,10 +305,6 @@ func (f *FileWriter) Close() error {
 }
 
 func (f *FileWriter) closeInt() error {
-	if f.closed {
-		return io.ErrClosedPipe
-	}
-
 	var lastBlock *hdfs.ExtendedBlockProto = nil
 	if !f.storeInDB {
 		if f.blockWriter != nil {

@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,11 +24,16 @@ const (
 	testStr    = "Abominable are the tumblers into which he pours his poison."
 	testStrOff = 48847
 
-	testStr2            = "http://www.gutenberg.org"
-	testStr2Off         = 1256988
-	testStr2NegativeOff = -288
+	testStr2            = "tumblers"
+	testStr2Off         = 48866
+	testStr2RelativeOff = 19
 
-	testChecksum = "27c076e4987344253650d3335a5d08ce"
+	testStr3            = "http://www.gutenberg.org"
+	testStr3Off         = 1256988
+	testStr3NegativeOff = -288
+
+	fooChecksum      = "27c076e4987344253650d3335a5d08ce"
+	mobydickChecksum = "67363b3b5740f5ef659bfe811d7922c5"
 )
 
 type randomReadConn struct {
@@ -171,16 +177,16 @@ func TestFileReadAt(t *testing.T) {
 
 	assert.EqualValues(t, string(buf), testStr)
 
-	buf = make([]byte, len(testStr2))
+	buf = make([]byte, len(testStr3))
 	off = 0
 	for off < len(buf) {
-		n, err := file.ReadAt(buf[off:], int64(testStr2Off+off))
+		n, err := file.ReadAt(buf[off:], int64(testStr3Off+off))
 		require.NoError(t, err)
 		assert.True(t, n > 0)
 		off += n
 	}
 
-	assert.EqualValues(t, testStr2, string(buf))
+	assert.EqualValues(t, testStr3, string(buf))
 }
 
 func TestFileReadAtEOF(t *testing.T) {
@@ -240,16 +246,35 @@ func TestFileSeek(t *testing.T) {
 	assert.EqualValues(t, len(testStr), n)
 	assert.EqualValues(t, testStr, string(buf.Bytes()))
 
-	// now seek forward to another block and read a string
-	off, err = file.Seek(testStr2NegativeOff, 2)
+	// Do a small forward seek within the block.
+	off, err = file.Seek(testStrOff, 0)
+	assert.NoError(t, err)
+	assert.EqualValues(t, testStrOff, off)
+	br := file.blockReader
+
+	off, err = file.Seek(testStr2RelativeOff, 1)
 	assert.NoError(t, err)
 	assert.EqualValues(t, testStr2Off, off)
+
+	// Make sure we didn't reconnect.
+	assert.Equal(t, br, file.blockReader)
 
 	buf.Reset()
 	n, err = io.CopyN(buf, file, int64(len(testStr2)))
 	assert.NoError(t, err)
 	assert.EqualValues(t, len(testStr2), n)
 	assert.EqualValues(t, testStr2, string(buf.Bytes()))
+
+	// now seek forward to another block and read a string
+	off, err = file.Seek(testStr3NegativeOff, 2)
+	assert.NoError(t, err)
+	assert.EqualValues(t, testStr3Off, off)
+
+	buf.Reset()
+	n, err = io.CopyN(buf, file, int64(len(testStr3)))
+	assert.NoError(t, err)
+	assert.EqualValues(t, len(testStr3), n)
+	assert.EqualValues(t, testStr3, string(buf.Bytes()))
 }
 
 func TestFileReadDir(t *testing.T) {
@@ -344,37 +369,56 @@ func TestOpenFileWithoutPermission(t *testing.T) {
 	assert.Nil(t, file)
 }
 
-func TestFileChecksum(t *testing.T) {
+func TestFileChecksumSmallFile(t *testing.T) {
 	client := getClient(t)
 
 	file, err := client.Open("/_test/foo.txt")
 	require.NoError(t, err)
 
 	checksum, err := file.Checksum()
+	//hopsfs skip this test if it failed
+	//due to no checksum support for files
+	//stored in DB
+	if err != nil && strings.Contains(err.Error(), "Checksum not supported for files stored in DB.") {
+		t.Skip()
+	}
 	require.NoError(t, err)
 
-	assert.EqualValues(t, testChecksum, hex.EncodeToString(checksum))
+	assert.EqualValues(t, fooChecksum, hex.EncodeToString(checksum))
+}
+
+func TestFileChecksumLargeFile(t *testing.T) {
+	client := getClient(t)
+
+	file, err := client.Open("/_test/mobydick.txt")
+	require.NoError(t, err)
+
+	checksum, err := file.Checksum()
+	require.NoError(t, err)
+
+	assert.EqualValues(t, mobydickChecksum, hex.EncodeToString(checksum))
 }
 
 func TestFileReadDeadline(t *testing.T) {
 	client := getClient(t)
 
-	file, err := client.Open("/_test/foo.txt")
+	file, err := client.Open("/_test/mobydick.txt")
 	require.NoError(t, err)
 
 	file.SetDeadline(time.Now().Add(200 * time.Millisecond))
-	_, err = file.Read([]byte{0, 0})
+	buff := make([]byte, 1024*65)
+	_, err = file.Read(buff)
 	assert.NoError(t, err)
 
 	time.Sleep(200 * time.Millisecond)
-	_, err = file.Read([]byte{0, 0})
+	_, err = file.Read(buff)
 	assert.NotNil(t, err)
 }
 
 func TestFileReadDeadlineBefore(t *testing.T) {
 	client := getClient(t)
 
-	file, err := client.Open("/_test/foo.txt")
+	file, err := client.Open("/_test/mobydick.txt")
 	require.NoError(t, err)
 
 	file.SetDeadline(time.Now())
@@ -382,10 +426,32 @@ func TestFileReadDeadlineBefore(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func TestFileChecksumDeadline(t *testing.T) {
+func TestFileChecksumDeadlineSmallFile(t *testing.T) {
 	client := getClient(t)
 
 	file, err := client.Open("/_test/foo.txt")
+	require.NoError(t, err)
+
+	file.SetDeadline(time.Now().Add(100 * time.Millisecond))
+	_, err = file.Checksum()
+	//hopsfs skip this test if it failed
+	//due to no checksum support for files
+	//stored in DB
+	if err != nil && strings.Contains(err.Error(), "Checksum not supported for files stored in DB.") {
+		t.Skip()
+	}
+
+	assert.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+	_, err = file.Checksum()
+	assert.NotNil(t, err)
+}
+
+func TestFileChecksumDeadlineLargeFile(t *testing.T) {
+	client := getClient(t)
+
+	file, err := client.Open("/_test/mobydick.txt")
 	require.NoError(t, err)
 
 	file.SetDeadline(time.Now().Add(100 * time.Millisecond))
@@ -397,7 +463,18 @@ func TestFileChecksumDeadline(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func TestFileChecksumDeadlineBefore(t *testing.T) {
+func TestFileChecksumDeadlineBeforeSmallFile(t *testing.T) {
+	client := getClient(t)
+
+	file, err := client.Open("/_test/foo.txt")
+	require.NoError(t, err)
+
+	file.SetDeadline(time.Now())
+	_, err = file.Checksum()
+	assert.NotNil(t, err)
+}
+
+func TestFileChecksumDeadlineBeforeLargeFile(t *testing.T) {
 	client := getClient(t)
 
 	file, err := client.Open("/_test/foo.txt")
