@@ -151,9 +151,19 @@ func TestNewWithMultipleNodes(t *testing.T) {
 
 	nns := conf.Namenodes()
 
-	nns = append([]string{"localhost:100"}, nns...)
+	nns = append([]string{removeEmptyStrings(nns)[0]}, nns...)
 	_, err = NewClient(ClientOptions{Addresses: nns, User: "gohdfs1"})
 	assert.Nil(t, err)
+}
+
+func removeEmptyStrings(s []string) []string {
+	var r []string
+	for _, str := range s {
+		if str != "" {
+			r = append(r, str)
+		}
+	}
+	return r
 }
 
 func TestNewWithFailingNode(t *testing.T) {
