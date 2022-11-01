@@ -191,7 +191,7 @@ func ClientOptionsFromConf(conf hadoopconf.HadoopConf) ClientOptions {
 // NewClient returns a connected Client for the given options, or an error if
 // the client could not be created.
 func NewClient(options ClientOptions) (*Client, error) {
-	client, err := newClientInt(options, options.Addresses, "")
+	client, err := newClientInt(options, options.Addresses, options.Addresses[0])
 	if err != nil {
 		return nil, err
 	}
@@ -221,6 +221,10 @@ func NewClient(options ClientOptions) (*Client, error) {
 
 func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress string) (*Client, error) {
 	var err error
+	if leaderAddress == "" {
+		return nil, errors.New("Leader NN address is not set")
+	}
+
 	if options.KerberosClient != nil && options.KerberosClient.Credentials == nil {
 		return nil, errors.New("kerberos enabled, but kerberos client is missing credentials")
 	}
@@ -254,14 +258,12 @@ func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress str
 		return nil, err
 	}
 
-	var leaderConn *rpc.NamenodeConnection = namenodeConn
-	if leaderAddress != "" {
-		leaderNNConnectionOptions := nnConnectionOptions
-		leaderNNConnectionOptions.Addresses = []string{leaderAddress}
-		leaderConn, err = rpc.NewNamenodeConnection(leaderNNConnectionOptions)
-		if err != nil {
-			return nil, err
-		}
+	var leaderConn *rpc.NamenodeConnection
+	leaderNNConnectionOptions := nnConnectionOptions
+	leaderNNConnectionOptions.Addresses = []string{leaderAddress}
+	leaderConn, err = rpc.NewNamenodeConnection(leaderNNConnectionOptions)
+	if err != nil {
+		return nil, err
 	}
 
 	c := &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options}

@@ -19,6 +19,7 @@ const (
 	UnresolvedLinkException      = "org.apache.hadoop.fs.UnresolvedLinkException"
 	NotReplicatedYetException    = "org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException"
 	illegalArgumentException     = "org.apache.hadoop.HadoopIllegalArgumentException"
+	notALeaderException          = "org.apache.hadoop.ipc.NotALeaderException"
 	javaIOException              = "java.io.IOException"
 )
 
@@ -80,6 +81,8 @@ func interpretException(err error) error {
 		// caught by the TX request handler and
 		// then thrown as IOException.
 		return os.ErrInvalid
+	case notALeaderException:
+		return syscall.EAGAIN
 	default:
 		return err
 	}
