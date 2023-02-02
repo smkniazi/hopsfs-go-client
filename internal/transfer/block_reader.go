@@ -133,26 +133,49 @@ func (br *BlockReader) Read(b []byte) (int, error) {
 // returns an error if skip was not attempted at all (because the BlockReader
 // isn't connected, or the offset is out of bounds or too far ahead) or the seek
 // failed for some other reason.
-func (br *BlockReader) Skip(off int64) error {
-	blockSize := int64(br.Block.GetB().GetNumBytes())
-	amountToSkip := off - br.Offset
+func (br *BlockReader) Skip(fileOldOffset int64, fileNewOffset int64) error {
 
-	if br.stream == nil || off < 0 || off >= blockSize ||
-		amountToSkip < 0 || amountToSkip > maxSkip {
-		return errors.New("unable to skip")
-	}
-
-	_, err := io.CopyN(io.Discard, br.stream, amountToSkip)
-	if err != nil {
-		if err == io.EOF {
-			err = io.ErrUnexpectedEOF
+	// small files
+	if len(br.Block.Data) > 0 {
+		if fileNewOffset < int64(len(br.Block.Data)) {
+			br.Offset = fileNewOffset
+			return nil
+		} else {
+			return io.ErrUnexpectedEOF
 		}
-
-		br.stream = nil
-		br.datanodes.recordFailure(err)
 	}
 
-	return err
+	blockStartOffset := int64(br.Block.GetOffset())
+	blockEndOffset := int64(br.Block.GetOffset() + br.Block.GetB().GetNumBytes())
+
+	if fileNewOffset < blockStartOffset || fileNewOffset >= blockEndOffset {
+		return errors.New("unable to skip. Offset is not in the current block")
+	}
+
+	if fileNewOffset > fileOldOffset {
+		// skip forward
+		amountToSkip := fileNewOffset - fileOldOffset
+		w, err := io.CopyN(io.Discard, br.stream, amountToSkip)
+		br.Offset += int64(w)
+		if err != nil || w != amountToSkip {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+
+			if w != amountToSkip {
+				err = fmt.Errorf("failed to skip correct number of bytes. Expected to skip: %d, skipped: %d", amountToSkip, w)
+			}
+
+			br.stream = nil
+			br.datanodes.recordFailure(err)
+		}
+		return nil
+	} else if fileNewOffset < fileOldOffset {
+		// this will not fail seek.
+		return errors.New("unable to skip. Backward seek is not yet implemented")
+	} else {
+		return errors.New("report bug. Unable to seek")
+	}
 }
 
 // Close implements io.Closer.

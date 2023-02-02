@@ -161,13 +161,14 @@ func (f *FileReader) Seek(offset int64, whence int) (int64, error) {
 	}
 
 	if f.offset != off {
+		oldOffset := f.offset
 		f.offset = off
 
 		if f.blockReader != nil {
 			// If the seek is within the next few chunks, it's much more
 			// efficient to throw away a few bytes than to reconnect and start
 			// a read at the new offset.
-			err := f.blockReader.Skip(f.offset - f.blockReader.Offset)
+			err := f.blockReader.Skip(oldOffset, f.offset)
 			if err == nil {
 				return f.offset, nil
 			}
