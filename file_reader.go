@@ -446,3 +446,7 @@ func (f *FileReader) getNewBlockReader() error {
 
 	return errors.New("invalid offset")
 }
+
+func (f *FileReader) GetPos() int64 {
+	return f.offset
+}

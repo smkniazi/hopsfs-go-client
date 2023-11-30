@@ -419,3 +419,7 @@ func (f *FileWriter) closeBlock() error {
 	f.blockWriter = nil
 	return nil
 }
+
+func (f *FileWriter) GetPos() int64 {
+	return -1
+}
