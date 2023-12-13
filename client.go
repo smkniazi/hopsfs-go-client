@@ -39,7 +39,6 @@ type Client struct {
 
 	defaults      *hdfs.FsServerDefaultsProto
 	encryptionKey *hdfs.DataEncryptionKeyProto
-	defaultDir    string
 }
 
 // ClientOptions represents the configurable options for a client.
@@ -267,8 +266,7 @@ func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress str
 		return nil, err
 	}
 
-	c := &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options,
-		defaultDir: fmt.Sprintf("/user/%s", options.User)}
+	c := &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options}
 
 	// set epoch
 	c.setEpoch()
