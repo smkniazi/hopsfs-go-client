@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"time"
 
@@ -447,6 +448,19 @@ func (f *FileReader) getNewBlockReader() error {
 	return errors.New("invalid offset")
 }
 
-func (f *FileReader) GetPos() int64 {
-	return f.offset
+func (f *FileReader) GetPos() uint64 {
+	return uint64(f.offset)
+}
+
+// Return the size of the remaining available bytes
+// if the size is less than or equal to Integer#MAX_VALUE,
+// otherwise, return Integer#MAX_VALUE.
+// this is how it is in Java API
+func (f *FileReader) Available() int32 {
+	available := f.info.Size() - f.offset
+	if available <= math.MaxInt {
+		return int32(available)
+	} else {
+		return math.MaxInt32
+	}
 }

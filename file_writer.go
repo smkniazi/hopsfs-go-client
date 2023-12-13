@@ -36,6 +36,7 @@ type FileWriter struct {
 	deadline        time.Time
 	storeInDB       bool
 	smallFileBuffer []byte
+	pos             uint64
 }
 
 // Create opens a new file in HDFS with the default replication, block size,
@@ -101,6 +102,7 @@ func (c *Client) CreateFile(name string, replication int, blockSize int64, perm 
 		fileId:          createResp.Fs.FileId,
 		storeInDB:       storedInDB,
 		smallFileBuffer: []byte{},
+		pos:             0,
 	}, nil
 }
 
@@ -133,6 +135,7 @@ func (c *Client) Append(name string) (*FileWriter, error) {
 		fileId:          appendResp.Stat.FileId,
 		storeInDB:       false,
 		smallFileBuffer: []byte{},
+		pos:             *appendResp.GetStat().Length,
 	}
 
 	// This returns nil if there are no blocks (it's an empty file) or if the
@@ -231,7 +234,10 @@ func (f *FileWriter) writeInternal(b []byte) (int, error) {
 	off := 0
 	for off < len(b) {
 		n, err := f.blockWriter.Write(b[off:])
-		off += n
+		if n > 0 {
+			off += n
+			f.pos += uint64(n)
+		}
 		if err == transfer.ErrEndOfBlock {
 			err = f.startNewBlock()
 		}
@@ -420,6 +426,6 @@ func (f *FileWriter) closeBlock() error {
 	return nil
 }
 
-func (f *FileWriter) GetPos() int64 {
-	return -1
+func (f *FileWriter) GetPos() uint64 {
+	return f.pos
 }

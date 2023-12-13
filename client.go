@@ -39,23 +39,24 @@ type Client struct {
 
 	defaults      *hdfs.FsServerDefaultsProto
 	encryptionKey *hdfs.DataEncryptionKeyProto
+	defaultDir    string
 }
 
 // ClientOptions represents the configurable options for a client.
 // The NamenodeDialFunc and DatanodeDialFunc options can be used to set
 // connection timeouts:
 //
-//    dialFunc := (&net.Dialer{
-//        Timeout:   30 * time.Second,
-//        KeepAlive: 30 * time.Second,
-//        DualStack: true,
-//    }).DialContext
+//	dialFunc := (&net.Dialer{
+//	    Timeout:   30 * time.Second,
+//	    KeepAlive: 30 * time.Second,
+//	    DualStack: true,
+//	}).DialContext
 //
-//    options := ClientOptions{
-//        Addresses: []string{"nn1:9000"},
-//        NamenodeDialFunc: dialFunc,
-//        DatanodeDialFunc: dialFunc,
-//    }
+//	options := ClientOptions{
+//	    Addresses: []string{"nn1:9000"},
+//	    NamenodeDialFunc: dialFunc,
+//	    DatanodeDialFunc: dialFunc,
+//	}
 type ClientOptions struct {
 	// Addresses specifies the namenode(s) to connect to.
 	Addresses []string
@@ -115,35 +116,35 @@ type ClientOptions struct {
 // suitable for creating a Client. Currently this sets the following fields
 // on the resulting ClientOptions:
 //
-//   // Determined by fs.defaultFS (or the deprecated fs.default.name), or
-//   // fields beginning with dfs.namenode.rpc-address.
-//   Addresses []string
+//	// Determined by fs.defaultFS (or the deprecated fs.default.name), or
+//	// fields beginning with dfs.namenode.rpc-address.
+//	Addresses []string
 //
-//   // Determined by dfs.client.use.datanode.hostname.
-//   UseDatanodeHostname bool
+//	// Determined by dfs.client.use.datanode.hostname.
+//	UseDatanodeHostname bool
 //
-//   // Set to a non-nil but empty client (without credentials) if the value of
-//   // hadoop.security.authentication is 'kerberos'. It must then be replaced
-//   // with a credentialed Kerberos client.
-//   KerberosClient *krb.Client
+//	// Set to a non-nil but empty client (without credentials) if the value of
+//	// hadoop.security.authentication is 'kerberos'. It must then be replaced
+//	// with a credentialed Kerberos client.
+//	KerberosClient *krb.Client
 //
-//   // Determined by dfs.namenode.kerberos.principal, with the realm
-//   // (everything after the first '@') chopped off.
-//   KerberosServicePrincipleName string
+//	// Determined by dfs.namenode.kerberos.principal, with the realm
+//	// (everything after the first '@') chopped off.
+//	KerberosServicePrincipleName string
 //
-//   // Determined by dfs.data.transfer.protection or dfs.encrypt.data.transfer
-//   // (in the latter case, it is set to 'privacy').
-//   DataTransferProtection string
+//	// Determined by dfs.data.transfer.protection or dfs.encrypt.data.transfer
+//	// (in the latter case, it is set to 'privacy').
+//	DataTransferProtection string
 //
 // Because of the way Kerberos can be forced by the Hadoop configuration but not
 // actually configured, you should check for whether KerberosClient is set in
 // the resulting ClientOptions before proceeding:
 //
-//   options := ClientOptionsFromConf(conf)
-//   if options.KerberosClient != nil {
-//      // Replace with a valid credentialed client.
-//      options.KerberosClient = getKerberosClient()
-//   }
+//	options := ClientOptionsFromConf(conf)
+//	if options.KerberosClient != nil {
+//	   // Replace with a valid credentialed client.
+//	   options.KerberosClient = getKerberosClient()
+//	}
 func ClientOptionsFromConf(conf hadoopconf.HadoopConf) ClientOptions {
 	options := ClientOptions{Addresses: conf.Namenodes()}
 
@@ -266,7 +267,8 @@ func newClientInt(options ClientOptions, nnAddresses []string, leaderAddress str
 		return nil, err
 	}
 
-	c := &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options}
+	c := &Client{namenode: namenodeConn, leaderNamenode: leaderConn, options: options,
+		defaultDir: fmt.Sprintf("/user/%s", options.User)}
 
 	// set epoch
 	c.setEpoch()

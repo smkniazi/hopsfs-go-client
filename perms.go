@@ -61,3 +61,11 @@ func (c *Client) Chtimes(name string, atime time.Time, mtime time.Time) error {
 
 	return nil
 }
+
+func (c *Client) GetWorkingDirectory() string {
+	return c.defaultDir
+}
+
+func (c *Client) SetWorkingDirectory(path string) {
+	c.defaultDir = path
+}
