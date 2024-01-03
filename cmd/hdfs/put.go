@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -107,7 +106,6 @@ func putFromFile(client *hdfs.Client, source string, dest string, overwrite bool
 			client.Mkdir(fullDest, mode)
 		} else {
 
-			fmt.Printf("overwrite %v\n", overwrite)
 			writer, err := client.CreateFile(fullDest, defaults.Replication, defaults.BlockSize, 0644, overwrite)
 			if err != nil {
 				return err
