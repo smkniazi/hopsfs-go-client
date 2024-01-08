@@ -60,7 +60,7 @@ setup() {
   run $HDFS put $ROOT_TEST_DIR/testdata /_test_cmd/put/existing.txt
     assert_failure
     assert_output <<OUT
-mkdir /_test_cmd/put/existing.txt: file already exists
+put /_test_cmd/put/existing.txt: file already exists
 OUT
 }
 

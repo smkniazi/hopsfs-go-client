@@ -9,7 +9,7 @@ import (
 	"github.com/colinmarc/hdfs/v2"
 )
 
-func put(args []string) {
+func put(args []string, overwrite bool) {
 	if len(args) != 2 {
 		fatalWithUsage()
 	}
@@ -31,13 +31,13 @@ func put(args []string) {
 	}
 
 	if filepath.Base(source) == "-" {
-		putFromStdin(client, dest)
+		putFromStdin(client, dest, overwrite)
 	} else {
-		putFromFile(client, source, dest)
+		putFromFile(client, source, dest, overwrite)
 	}
 }
 
-func putFromStdin(client *hdfs.Client, dest string) {
+func putFromStdin(client *hdfs.Client, dest string, overwrite bool) {
 	// If the destination exists, regardless of what it is, bail out.
 	_, err := client.Stat(dest)
 	if err == nil {
@@ -54,7 +54,12 @@ func putFromStdin(client *hdfs.Client, dest string) {
 		}
 	}
 
-	writer, err := client.Create(dest)
+	defaults, err := client.ServerDefaults()
+	if err != nil {
+		fatal(err)
+	}
+
+	writer, err := client.CreateFile(dest, defaults.Replication, defaults.BlockSize, 0644, overwrite)
 	if err != nil {
 		fatal(err)
 	}
@@ -63,7 +68,7 @@ func putFromStdin(client *hdfs.Client, dest string) {
 	io.Copy(writer, os.Stdin)
 }
 
-func putFromFile(client *hdfs.Client, source string, dest string) {
+func putFromFile(client *hdfs.Client, source string, dest string, overwrite bool) {
 	// If the destination is an existing directory, place it inside. Otherwise,
 	// the destination is really the parent directory, and we need to rename the
 	// source directory as we copy.
@@ -72,13 +77,20 @@ func putFromFile(client *hdfs.Client, source string, dest string) {
 		if existing.IsDir() {
 			dest = path.Join(dest, filepath.Base(source))
 		} else {
-			fatal(&os.PathError{"mkdir", dest, os.ErrExist})
+			if !overwrite {
+				fatal(&os.PathError{"put", dest, os.ErrExist})
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		fatal(err)
 	}
 
+	defaults, err := client.ServerDefaults()
+	if err != nil {
+		fatal(err)
+	}
 	mode := 0755 | os.ModeDir
+
 	err = filepath.Walk(source, func(p string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -93,7 +105,8 @@ func putFromFile(client *hdfs.Client, source string, dest string) {
 		if fi.IsDir() {
 			client.Mkdir(fullDest, mode)
 		} else {
-			writer, err := client.Create(fullDest)
+
+			writer, err := client.CreateFile(fullDest, defaults.Replication, defaults.BlockSize, 0644, overwrite)
 			if err != nil {
 				return err
 			}
