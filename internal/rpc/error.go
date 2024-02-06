@@ -32,7 +32,7 @@ func (err *NamenodeError) Message() string {
 }
 
 func (err *NamenodeError) Error() string {
-	s := fmt.Sprintf("%s call failed with %s", err.method, err.Desc())
+	s := fmt.Sprintf("%s call failed with %s. message: %s", err.method, err.Desc(), err.Message())
 	if err.exception != "" {
 		s += fmt.Sprintf(" (%s)", err.exception)
 	}
