@@ -80,7 +80,7 @@ func interpretException(err error) error {
 		// In HopsFS all RuntimeExceptions are
 		// caught by the TX request handler and
 		// then thrown as IOException.
-		return os.ErrInvalid
+		return syscall.EIO
 	case notALeaderException:
 		return syscall.EAGAIN
 	default:

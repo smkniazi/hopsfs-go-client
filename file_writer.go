@@ -340,7 +340,7 @@ func (f *FileWriter) closeInt() error {
 	for i := 0; i < 10; i++ {
 		err := f.client.namenode.Execute("complete", completeReq, completeResp)
 		if err != nil {
-			return &os.PathError{Op: "create", Path: f.name, Err: err}
+			return &os.PathError{Op: "create", Path: f.name, Err: interpretException(err)}
 		}
 
 		closed := *completeResp.Result
