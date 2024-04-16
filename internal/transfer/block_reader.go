@@ -135,6 +135,10 @@ func (br *BlockReader) Read(b []byte) (int, error) {
 // failed for some other reason.
 func (br *BlockReader) Skip(fileOldOffset int64, fileNewOffset int64) error {
 
+	if fileOldOffset == fileNewOffset {
+		return nil
+	}
+
 	// small files
 	if len(br.Block.Data) > 0 {
 		if fileNewOffset < int64(len(br.Block.Data)) {
@@ -152,7 +156,20 @@ func (br *BlockReader) Skip(fileOldOffset int64, fileNewOffset int64) error {
 		return errors.New("unable to skip. Offset is not in the current block")
 	}
 
+	if br.stream == nil {
+		return errors.New("unable to skip. br stream is not set")
+	}
+
+	if fileNewOffset < fileOldOffset {
+		return errors.New("unable to skip. Backward seek is not yet implemented")
+	}
+
 	if fileNewOffset > fileOldOffset {
+
+		if (fileNewOffset - fileOldOffset) > maxSkip {
+			return errors.New("unable to skip. Exceedes maxSkip")
+		}
+
 		// skip forward
 		amountToSkip := fileNewOffset - fileOldOffset
 		w, err := io.CopyN(io.Discard, br.stream, amountToSkip)
@@ -168,14 +185,11 @@ func (br *BlockReader) Skip(fileOldOffset int64, fileNewOffset int64) error {
 
 			br.stream = nil
 			br.datanodes.recordFailure(err)
+			fmt.Println("block reader. recording error \n")
+			return err
 		}
-		return nil
-	} else if fileNewOffset < fileOldOffset {
-		// this will not fail seek.
-		return errors.New("unable to skip. Backward seek is not yet implemented")
-	} else {
-		return errors.New("report bug. Unable to seek")
 	}
+	return nil
 }
 
 // Close implements io.Closer.
@@ -218,19 +232,25 @@ func (br *BlockReader) connectNext() error {
 	checksumInfo := readInfo.GetChecksum()
 
 	var checksumTab *crc32.Table
+	var checksumSize int
 	checksumType := checksumInfo.GetType()
 	switch checksumType {
 	case hdfs.ChecksumTypeProto_CHECKSUM_CRC32:
 		checksumTab = crc32.IEEETable
+		checksumSize = 4
 	case hdfs.ChecksumTypeProto_CHECKSUM_CRC32C:
 		checksumTab = crc32.MakeTable(crc32.Castagnoli)
+		checksumSize = 4
+	case hdfs.ChecksumTypeProto_CHECKSUM_NULL:
+		checksumTab = nil
+		checksumSize = 0
 	default:
 		return fmt.Errorf("unsupported checksum type: %d", checksumType)
 	}
 
 	chunkOffset := int64(readInfo.GetChunkOffset())
 	chunkSize := int(checksumInfo.GetBytesPerChecksum())
-	stream := newBlockReadStream(conn, chunkSize, checksumTab)
+	stream := newBlockReadStream(conn, chunkSize, checksumTab, checksumSize)
 
 	// The read will start aligned to a chunk boundary, so we need to skip
 	// forward to the requested offset.

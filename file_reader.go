@@ -161,26 +161,23 @@ func (f *FileReader) Seek(offset int64, whence int) (int64, error) {
 		return f.offset, fmt.Errorf("invalid resulting offset: %d", off)
 	}
 
-	if f.offset != off {
-		oldOffset := f.offset
-		f.offset = off
-
-		if f.blockReader != nil {
-			// If the seek is within the next few chunks, it's much more
-			// efficient to throw away a few bytes than to reconnect and start
-			// a read at the new offset.
-			err := f.blockReader.Skip(oldOffset, f.offset)
-			if err == nil {
-				return f.offset, nil
-			}
-
-			// It isn't possible to seek within the current block, so reset such
-			// that we can connect to the new block.
+	oldOffset := f.offset
+	newOffset := off
+	if f.blockReader != nil {
+		// If the seek is within the next few chunks, it's much more
+		// efficient to throw away a few bytes than to reconnect and start
+		// a read at the new offset.
+		err := f.blockReader.Skip(oldOffset, newOffset)
+		if err != nil {
+			// It isn't possible to skip forward in the current block, so reset such
+			// that we can reconnect at the new offset.
 			f.blockReader.Close()
 			f.blockReader = nil
+
 		}
 	}
 
+	f.offset = off
 	return f.offset, nil
 }
 
@@ -396,7 +393,7 @@ func (f *FileReader) Close() error {
 	f.closed = true
 
 	if f.blockReader != nil {
-		f.blockReader.Close()
+		return f.blockReader.Close()
 	}
 
 	return nil

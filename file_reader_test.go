@@ -24,16 +24,20 @@ const (
 	testStr    = "Abominable are the tumblers into which he pours his poison."
 	testStrOff = 48847
 
-	testStr2            = "tumblers"
-	testStr2Off         = 48866
-	testStr2RelativeOff = 19
+	testStr2    = "tumblers"
+	testStr2Off = 48866
 
 	testStr3            = "http://www.gutenberg.org"
 	testStr3Off         = 1256988
 	testStr3NegativeOff = -288
 
-	fooChecksum      = "27c076e4987344253650d3335a5d08ce"
-	mobydickChecksum = "67363b3b5740f5ef659bfe811d7922c5"
+	testStr4    = "Moby Dick"
+	testStr4Off = 34
+
+	testStr5    = "LEVIATHAN."
+	testStr5Off = 8234
+
+	testChecksum = "27c076e4987344253650d3335a5d08ce"
 )
 
 type randomReadConn struct {
@@ -252,7 +256,7 @@ func TestFileSeek(t *testing.T) {
 	assert.EqualValues(t, testStrOff, off)
 	br := file.blockReader
 
-	off, err = file.Seek(testStr2RelativeOff, 1)
+	off, err = file.Seek((testStr2Off - testStrOff), 1)
 	assert.NoError(t, err)
 	assert.EqualValues(t, testStr2Off, off)
 
@@ -265,7 +269,7 @@ func TestFileSeek(t *testing.T) {
 	assert.EqualValues(t, len(testStr2), n)
 	assert.EqualValues(t, testStr2, string(buf.Bytes()))
 
-	// now seek forward to another block and read a string
+	// Now seek forward to another block and read.
 	off, err = file.Seek(testStr3NegativeOff, 2)
 	assert.NoError(t, err)
 	assert.EqualValues(t, testStr3Off, off)
@@ -275,6 +279,33 @@ func TestFileSeek(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualValues(t, len(testStr3), n)
 	assert.EqualValues(t, testStr3, string(buf.Bytes()))
+}
+
+func TestFileSeekReadSkip(t *testing.T) {
+	client := getClient(t)
+
+	file, err := client.Open("/_test/mobydick.txt")
+	require.NoError(t, err)
+
+	buf := make([]byte, len(testStr4))
+	n, err := file.ReadAt(buf, testStr4Off)
+	assert.NoError(t, err)
+	assert.Equal(t, len(buf), n)
+	assert.Equal(t, testStr4, string(buf))
+	br := file.blockReader
+
+	off, err := file.Seek(testStr5Off, 0)
+	assert.NoError(t, err)
+	assert.EqualValues(t, testStr5Off, off)
+
+	// Make sure we didn't reconnect.
+	assert.Equal(t, br, file.blockReader)
+
+	buf = make([]byte, len(testStr5))
+	n, err = io.ReadFull(file, buf)
+	assert.NoError(t, err)
+	assert.Equal(t, len(buf), n)
+	assert.Equal(t, testStr5, string(buf))
 }
 
 func TestFileReadDir(t *testing.T) {
