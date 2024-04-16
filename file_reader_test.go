@@ -38,6 +38,9 @@ const (
 	testStr5Off = 8234
 
 	testChecksum = "27c076e4987344253650d3335a5d08ce"
+
+	fooChecksum      = "27c076e4987344253650d3335a5d08ce"
+	mobydickChecksum = "67363b3b5740f5ef659bfe811d7922c5"
 )
 
 type randomReadConn struct {

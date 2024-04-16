@@ -185,7 +185,6 @@ func (br *BlockReader) Skip(fileOldOffset int64, fileNewOffset int64) error {
 
 			br.stream = nil
 			br.datanodes.recordFailure(err)
-			fmt.Println("block reader. recording error \n")
 			return err
 		}
 	}
