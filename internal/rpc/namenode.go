@@ -402,7 +402,7 @@ func (c *NamenodeConnection) tlsDialFunction(ctx context.Context, network, addre
 
 	if err != nil {
 		log.Println(err)
-		panic("Failed to connect: " + err.Error())
+		return nil, err
 	}
 	return conn, nil
 }

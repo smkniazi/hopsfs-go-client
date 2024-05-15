@@ -106,9 +106,13 @@ func (conf HadoopConf) Namenodes() []string {
 	for key, value := range conf {
 		if strings.Contains(key, "fs.default") {
 			nnUrl, _ := url.Parse(value)
-			nns[nnUrl.Host] = true
+			if nnUrl.Host != "" {
+				nns[nnUrl.Host] = true
+			}
 		} else if strings.HasPrefix(key, "dfs.namenode.rpc-address.") {
-			nns[value] = true
+			if value != "" {
+				nns[value] = true
+			}
 		} else if strings.HasPrefix(key, "dfs.ha.namenodes.") {
 			clusterNames = append(clusterNames, key[len("dfs.ha.namenodes."):])
 		}
