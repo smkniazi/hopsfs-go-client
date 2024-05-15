@@ -59,7 +59,7 @@ func putFromStdin(client *hdfs.Client, dest string, overwrite bool) {
 		fatal(err)
 	}
 
-	writer, err := client.CreateFile(dest, defaults.Replication, defaults.BlockSize, 0644, overwrite)
+	writer, err := client.CreateFile(dest, defaults.Replication, defaults.BlockSize, 0644, overwrite, false)
 	if err != nil {
 		fatal(err)
 	}
@@ -106,7 +106,7 @@ func putFromFile(client *hdfs.Client, source string, dest string, overwrite bool
 			client.Mkdir(fullDest, mode)
 		} else {
 
-			writer, err := client.CreateFile(fullDest, defaults.Replication, defaults.BlockSize, 0644, overwrite)
+			writer, err := client.CreateFile(fullDest, defaults.Replication, defaults.BlockSize, 0644, overwrite, false)
 			if err != nil {
 				return err
 			}

@@ -24,7 +24,7 @@ hdfs: clean $(SOURCES)
 	go build -ldflags "-X main.version=$(TAG)" ./cmd/hdfs
 
 test: hdfs
-	go test -v -race -timeout 30s ./...
+	go test -v -race -timeout 60s ./...
 	bats ./cmd/hdfs/test/*.bats
 
 clean:

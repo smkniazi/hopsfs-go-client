@@ -122,7 +122,7 @@ func TestFileBigWriteMultipleBlocks(t *testing.T) {
 	client := getClient(t)
 
 	mkdirp(t, "/_test/create")
-	writer, err := client.CreateFile("/_test/create/3.txt", 1, 1048576, 0755, false)
+	writer, err := client.CreateFile("/_test/create/3.txt", 1, 1048576, 0755, false, false)
 	require.NoError(t, err)
 
 	mobydick, err := os.Open("testdata/mobydick.txt")
@@ -147,7 +147,7 @@ func TestFileBigWriteWeirdBlockSize(t *testing.T) {
 	client := getClient(t)
 
 	mkdirp(t, "/_test/create")
-	writer, err := client.CreateFile("/_test/create/4.txt", 1, 1050000, 0755, false)
+	writer, err := client.CreateFile("/_test/create/4.txt", 1, 1050000, 0755, false, false)
 	require.NoError(t, err)
 
 	mobydick, err := os.Open("testdata/mobydick.txt")
@@ -172,7 +172,7 @@ func TestFileBigWriteReplication(t *testing.T) {
 	client := getClient(t)
 
 	mkdirp(t, "/_test/create")
-	writer, err := client.CreateFile("/_test/create/5.txt", 3, 1048576, 0755, false)
+	writer, err := client.CreateFile("/_test/create/5.txt", 3, 1048576, 0755, false, false)
 	require.NoError(t, err)
 
 	mobydick, err := os.Open("testdata/mobydick.txt")
@@ -261,11 +261,11 @@ func TestCreateFileAlreadyExistsException(t *testing.T) {
 
 	client := getClient(t)
 
-	f, err := client.CreateFile(filePath, 1, 1048576, 0755, false)
+	f, err := client.CreateFile(filePath, 1, 1048576, 0755, false, false)
 	require.NoError(t, err)
 	assertClose(t, f)
 
-	_, err = client.CreateFile(filePath, 1, 1048576, 0755, false)
+	_, err = client.CreateFile(filePath, 1, 1048576, 0755, false, false)
 	assertPathError(t, err, "create", filePath, os.ErrExist) // org.apache.hadoop.fs.FileAlreadyExistsException is received from HDFS
 }
 
@@ -277,13 +277,13 @@ func TestCreateFileAlreadyBeingCreatedException(t *testing.T) {
 
 	client := getClient(t)
 
-	f, err := client.CreateFile(filePath, 1, 1048576, 0755, false)
+	f, err := client.CreateFile(filePath, 1, 1048576, 0755, false, false)
 	require.NoError(t, err)
 	defer func() {
 		assertClose(t, f)
 	}()
 
-	_, err = client.CreateFile(filePath, 1, 1048576, 0755, false)
+	_, err = client.CreateFile(filePath, 1, 1048576, 0755, false, false)
 	assertPathError(t, err, "create", filePath, os.ErrExist) // org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException is received from HDFS
 }
 
@@ -379,7 +379,7 @@ func TestFileAppendLastBlockFull(t *testing.T) {
 
 	mkdirp(t, "/_test/append")
 
-	writer, err := client.CreateFile("/_test/append/3.txt", 3, 1048576, 0644, false)
+	writer, err := client.CreateFile("/_test/append/3.txt", 3, 1048576, 0644, false, false)
 	require.NoError(t, err)
 
 	wn, err := io.CopyN(writer, mobydick, 1048576)

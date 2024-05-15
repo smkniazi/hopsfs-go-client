@@ -60,14 +60,14 @@ func (c *Client) Create(name string) (*FileWriter, error) {
 
 	replication := int(defaults.GetReplication())
 	blockSize := int64(defaults.GetBlockSize())
-	return c.CreateFile(name, replication, blockSize, 0644, false)
+	return c.CreateFile(name, replication, blockSize, 0644, false, false)
 }
 
 // CreateFile opens a new file in HDFS with the given replication, block size,
 // and permissions, and returns an io.WriteCloser for writing to it. Because of
 // the way that HDFS writes are buffered and acknowledged asynchronously, it is
 // very important that Close is called after all data has been written.
-func (c *Client) CreateFile(name string, replication int, blockSize int64, perm os.FileMode, overwrite bool) (*FileWriter, error) {
+func (c *Client) CreateFile(name string, replication int, blockSize int64, perm os.FileMode, overwrite bool, createParent bool) (*FileWriter, error) {
 	createFlag := proto.Uint32(1)
 	if overwrite {
 		createFlag = proto.Uint32(3) // 0x01 for Create and 0x10 for overwrite
@@ -78,7 +78,7 @@ func (c *Client) CreateFile(name string, replication int, blockSize int64, perm 
 		Masked:       &hdfs.FsPermissionProto{Perm: proto.Uint32(uint32(perm))},
 		ClientName:   proto.String(c.namenode.ClientName),
 		CreateFlag:   createFlag,
-		CreateParent: proto.Bool(false),
+		CreateParent: proto.Bool(createParent),
 		Replication:  proto.Uint32(uint32(replication)),
 		BlockSize:    proto.Uint64(uint64(blockSize)),
 	}

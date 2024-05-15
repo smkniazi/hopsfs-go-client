@@ -16,7 +16,7 @@ func writeAndVerifyTestFile(t *testing.T, snapshotDir, filepath string) {
 	baleet(t, filepath)
 	mkdirp(t, snapshotDir)
 
-	f, err := c.CreateFile(filepath, 1, 1048576, 0744, false)
+	f, err := c.CreateFile(filepath, 1, 1048576, 0744, false, false)
 	require.NoError(t, err)
 
 	// fill the file a bit

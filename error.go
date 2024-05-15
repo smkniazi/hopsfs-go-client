@@ -2,6 +2,7 @@ package hdfs
 
 import (
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -16,8 +17,8 @@ const (
 	dSQuotaExceededException     = "org.apache.hadoop.hdfs.protocol.DSQuotaExceededException"
 	nSQuotaExceededException     = "org.apache.hadoop.hdfs.protocol.NSQuotaExceededException"
 	parentNotDirectoryException  = "org.apache.hadoop.fs.ParentNotDirectoryException"
-	UnresolvedLinkException      = "org.apache.hadoop.fs.UnresolvedLinkException"
-	NotReplicatedYetException    = "org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException"
+	unresolvedLinkException      = "org.apache.hadoop.fs.UnresolvedLinkException"
+	notReplicatedYetException    = "org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException"
 	illegalArgumentException     = "org.apache.hadoop.HadoopIllegalArgumentException"
 	notALeaderException          = "org.apache.hadoop.ipc.NotALeaderException"
 	javaIOException              = "java.io.IOException"
@@ -45,10 +46,57 @@ func interpretCreateException(err error) error {
 	return interpretException(err)
 }
 
+// unwrapping exceptions as in hopsfs all exceptions
+// are wrapped in IOException
+func unwrapHopsFSException(err error) string {
+	if remoteErr, ok := err.(Error); ok {
+		exception := remoteErr.Exception()
+		message := remoteErr.Message()
+
+		if strings.HasPrefix(exception, javaIOException) {
+			if strings.HasPrefix(message, fileNotFoundException) {
+				return fileAlreadyExistsException
+			} else if strings.HasPrefix(message, permissionDeniedException) {
+				return permissionDeniedException
+			} else if strings.HasPrefix(message, pathIsNotEmptyDirException) {
+				return pathIsNotEmptyDirException
+			} else if strings.HasPrefix(message, fileAlreadyExistsException) {
+				return fileAlreadyExistsException
+			} else if strings.HasPrefix(message, alreadyBeingCreatedException) {
+				return alreadyBeingCreatedException
+			} else if strings.HasPrefix(message, invalidPathException) {
+				return invalidPathException
+			} else if strings.HasPrefix(message, safeModeException) {
+				return safeModeException
+			} else if strings.HasPrefix(message, dSQuotaExceededException) {
+				return dSQuotaExceededException
+			} else if strings.HasPrefix(message, nSQuotaExceededException) {
+				return nSQuotaExceededException
+			} else if strings.HasPrefix(message, parentNotDirectoryException) {
+				return parentNotDirectoryException
+			} else if strings.HasPrefix(message, unresolvedLinkException) {
+				return unresolvedLinkException
+			} else if strings.HasPrefix(message, notReplicatedYetException) {
+				return notReplicatedYetException
+			} else if strings.HasPrefix(message, illegalArgumentException) {
+				return illegalArgumentException
+			} else if strings.HasPrefix(message, notALeaderException) {
+				return notALeaderException
+			} else if strings.HasPrefix(message, notALeaderException) {
+				return notALeaderException
+			}
+		} else {
+			return exception
+		}
+	}
+
+	return "Not a Remote HopsFS Exception"
+}
+
 func interpretException(err error) error {
 	var exception string
-	if remoteErr, ok := err.(Error); ok {
-		exception = remoteErr.Exception()
+	if _, ok := err.(Error); ok {
+		exception = unwrapHopsFSException(err)
 	}
 
 	switch exception {
@@ -70,9 +118,9 @@ func interpretException(err error) error {
 		return syscall.EDQUOT
 	case parentNotDirectoryException:
 		return syscall.ENOENT
-	case UnresolvedLinkException:
+	case unresolvedLinkException:
 		return syscall.ENOLINK
-	case NotReplicatedYetException:
+	case notReplicatedYetException:
 		return syscall.EPROTO // Protocol Error
 	case illegalArgumentException:
 		return os.ErrInvalid
