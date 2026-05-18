@@ -492,7 +492,7 @@ func TestFileChecksumDeadlineLargeFile(t *testing.T) {
 	_, err = file.Checksum()
 	assert.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
+	file.SetDeadline(time.Now().Add(-time.Second))
 	_, err = file.Checksum()
 	assert.NotNil(t, err)
 }
