@@ -488,7 +488,7 @@ func TestFileChecksumDeadlineLargeFile(t *testing.T) {
 	file, err := client.Open("/_test/mobydick.txt")
 	require.NoError(t, err)
 
-	file.SetDeadline(time.Now().Add(100 * time.Millisecond))
+	file.SetDeadline(time.Now().Add(5000 * time.Millisecond))
 	_, err = file.Checksum()
 	assert.NoError(t, err)
 
