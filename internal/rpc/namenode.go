@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	hadoop "github.com/colinmarc/hdfs/v2/internal/protocol/hadoop_common"
@@ -30,9 +31,11 @@ const (
 	standbyExceptionClass      = "org.apache.hadoop.ipc.StandbyException"
 )
 
+// leaseRenewInterval is a variable so tests can shorten it.
+var leaseRenewInterval = 1 * time.Second
+
 const (
-	backoffDuration    = 5 * time.Second
-	leaseRenewInterval = 1 * time.Second
+	backoffDuration = 5 * time.Second
 
 	DefaultDialTimeout    = 30 * time.Second
 	DefaultTCPUserTimeout = 30 * time.Second
@@ -59,16 +62,20 @@ type NamenodeConnection struct {
 	ClientCertificate string
 	ClientKey         string
 
-	dialFunc       func(ctx context.Context, network, addr string) (net.Conn, error)
-	dialTimeout    time.Duration
-	tcpUserTimeout time.Duration
-	conn           net.Conn
-	host           *namenodeHost
-	hostList       []*namenodeHost
-	transport      transport
+	dialFunc          func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialTimeout       time.Duration
+	tcpUserTimeout    time.Duration
+	maxResponseLength uint32
+	conn              net.Conn
+	host              *namenodeHost
+	hostList          []*namenodeHost
+	transport         transport
 
 	reqLock sync.Mutex
 	done    chan struct{}
+
+	// openWriters counts this client's files under lease; leases are renewed only while it is above zero.
+	openWriters atomic.Int64
 }
 
 // NamenodeConnectionOptions represents the configurable options available
@@ -106,6 +113,8 @@ type NamenodeConnectionOptions struct {
 	// Bounds how long transmitted data may remain unacknowledged before aborting the connection.
 	// Only applied on platforms that support TCP_USER_TIMEOUT.
 	TCPUserTimeout time.Duration
+	// Bounds the size of one response in bytes; zero selects DefaultMaxResponseLength.
+	MaxResponseLength uint32
 }
 
 func effectiveTimeout(configured, def time.Duration) time.Duration {
@@ -164,7 +173,9 @@ func NewNamenodeConnection(options NamenodeConnectionOptions) (*NamenodeConnecti
 		dialTimeout:    effectiveTimeout(options.DialTimeout, DefaultDialTimeout),
 		tcpUserTimeout: effectiveTimeout(options.TCPUserTimeout, DefaultTCPUserTimeout),
 		hostList:       hostList,
-		transport:      &basicTransport{clientID: clientId},
+		transport:      &basicTransport{clientID: clientId, maxResponseLength: options.MaxResponseLength},
+
+		maxResponseLength: options.MaxResponseLength,
 
 		done: make(chan struct{}),
 	}
@@ -382,7 +393,26 @@ func (c *NamenodeConnection) doNamenodeHandshake() error {
 	return err
 }
 
-// renewLeases periodically renews all leases for the connection.
+// AcquireLease records that a file of this client was opened for writing, so its lease must be renewed.
+func (c *NamenodeConnection) AcquireLease() {
+	c.openWriters.Add(1)
+}
+
+// ReleaseLease records that a file recorded with AcquireLease was completed.
+func (c *NamenodeConnection) ReleaseLease() {
+	c.openWriters.Add(-1)
+}
+
+// OpenWriters reports how many of this client's files are under lease.
+func (c *NamenodeConnection) OpenWriters() int64 {
+	return c.openWriters.Load()
+}
+
+// renewLeases periodically renews the client's leases while it has files open for writing.
+//
+// A client with no open writers holds no lease, so it sends nothing. Renewing anyway kept every
+// idle reader calling the namenode each second, and redialling it after each failure for as long
+// as the process lived.
 func (c *NamenodeConnection) renewLeases() {
 	ticker := time.NewTicker(leaseRenewInterval)
 	defer ticker.Stop()
@@ -390,6 +420,9 @@ func (c *NamenodeConnection) renewLeases() {
 	for {
 		select {
 		case <-ticker.C:
+			if c.openWriters.Load() <= 0 {
+				continue
+			}
 			req := &hdfs.RenewLeaseRequestProto{ClientName: proto.String(c.ClientName)}
 			resp := &hdfs.RenewLeaseResponseProto{}
 
@@ -437,7 +470,7 @@ func (c *NamenodeConnection) tlsDialFunction(ctx context.Context, network, addre
 	for _, cert := range certChain.Certificate {
 		x509Cert, err := x509.ParseCertificate(cert)
 		if err != nil {
-			panic(err)
+			return nil, fmt.Errorf("parsing root CA bundle %s: %w", c.RootCABundle, err)
 		}
 		config.RootCAs.AddCert(x509Cert)
 	}
@@ -453,7 +486,7 @@ func (c *NamenodeConnection) tlsDialFunction(ctx context.Context, network, addre
 		for i, asn1Data := range rawCerts {
 			cert, err := x509.ParseCertificate(asn1Data)
 			if err != nil {
-				panic("Failed to parse certificate from server: " + err.Error())
+				return fmt.Errorf("parsing the namenode's certificate: %w", err)
 			}
 			certs[i] = cert
 		}
