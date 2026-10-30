@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -29,10 +30,26 @@ const (
 	protocolClassVersion       = 1
 	handshakeCallID            = -3
 	standbyExceptionClass      = "org.apache.hadoop.ipc.StandbyException"
+	retriableExceptionClass    = "org.apache.hadoop.ipc.RetriableException"
 )
 
 // leaseRenewInterval is a variable so tests can shorten it.
 var leaseRenewInterval = 1 * time.Second
+
+// Retries of a request the namenode answered with RetriableException, the
+// shape of the Java client's dfs.client.retry.max.attempts: the number of
+// retries, the first wait and the cap of the doubling waits. Thirty retries
+// from 1 s to 60 s span 19 to 31 minutes with the jitter, past both limits
+// at which the NameNode's MDCleaner reclaims a subtree lock: 10 minutes for
+// a dead NameNode's (dfs.subtree.clean.failed.ops.locks.delay) and 15 for a
+// live NameNode's slow operation (dfs.subtree.clean.slow.ops.locks.delay),
+// so a lock that outlives its operation does not fail the request.
+// Variables so tests can shorten them.
+var (
+	retriableMaxRetries     = 30
+	retriableInitialBackoff = 1 * time.Second
+	retriableMaxBackoff     = 60 * time.Second
+)
 
 const (
 	backoffDuration = 5 * time.Second
@@ -291,20 +308,38 @@ func (c *NamenodeConnection) markFailure(err error) {
 	c.host.lastErrorAt = time.Now()
 }
 
+// jitter spreads d over [3d/4, 5d/4], so clients blocked by the same
+// subtree operation do not retry in lockstep.
+func jitter(d time.Duration) time.Duration {
+	if d < 4 {
+		return d
+	}
+	return d*3/4 + time.Duration(rand.Int63n(int64(d/2)+1))
+}
+
 // Execute performs an rpc call. It does this by sending req over the wire and
 // unmarshaling the result into resp.
+//
+// A RetriableException from the namenode is retried here with exponential
+// backoff, retriableMaxRetries times. HopsFS throws it for a request that
+// resolves a path under a subtree operation (a directory chmod holds the
+// lock for milliseconds, a large move or delete for minutes) and expects the
+// client to retry, as Hadoop's Java client does.
 func (c *NamenodeConnection) Execute(method string, req proto.Message, resp proto.Message) error {
 	c.reqLock.Lock()
 	defer c.reqLock.Unlock()
 
-	c.currentRequestID++
-	requestID := c.currentRequestID
-
+	retries := 0
+	backoff := retriableInitialBackoff
 	for {
 		err := c.resolveConnection()
 		if err != nil {
 			return err
 		}
+
+		// A new call id per attempt, as the Java client's retries carry.
+		c.currentRequestID++
+		requestID := c.currentRequestID
 
 		err = c.transport.writeRequest(c.conn, method, requestID, req)
 		if err != nil {
@@ -316,9 +351,22 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 		if err != nil {
 			if nerr, ok := err.(*NamenodeError); ok {
 				// The namenode answered, so the connection itself is healthy.
-				// Only retry on a standby exception.
-				if nerr.exception == standbyExceptionClass {
+				switch nerr.exception {
+				case standbyExceptionClass:
 					c.markFailure(err)
+					continue
+				case retriableExceptionClass:
+					if retries >= retriableMaxRetries {
+						return err
+					}
+					retries++
+					// Other requests on this connection go on while this one waits.
+					c.reqLock.Unlock()
+					time.Sleep(jitter(backoff))
+					c.reqLock.Lock()
+					if backoff *= 2; backoff > retriableMaxBackoff {
+						backoff = retriableMaxBackoff
+					}
 					continue
 				}
 				return err
