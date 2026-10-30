@@ -34,13 +34,32 @@ func (t *answeringTransport) readResponse(r io.Reader, method string, requestID 
 	return answer
 }
 
-func namenodeError(exception string) *NamenodeError {
+func namenodeError(exception, message string) *NamenodeError {
 	return &NamenodeError{
 		method:    "getFileInfo",
 		code:      int(hadoop.RpcResponseHeaderProto_ERROR_APPLICATION),
 		exception: exception,
-		message:   "The subtree mlruns is locked by Namenode Id: 1",
+		message:   message,
 	}
+}
+
+// subtreeLocked is the answer as HopsFS sends it: a RetriableException whose
+// message is the wrapped exception's toString and its stack trace.
+func subtreeLocked() *NamenodeError {
+	return namenodeError(retriableExceptionClass,
+		subtreeLockedExceptionClass+": The subtree mlruns is locked by Namenode Id: 1. Active Namenodes are: [1]\n\tat io.hops.transaction.lock.INodeLock.checkSubtreeLock(INodeLock.java:278)")
+}
+
+func notStarted() *NamenodeError {
+	return namenodeError(retriableExceptionClass, "NameNode still not started")
+}
+
+func repeat(answer error, n int) []error {
+	answers := make([]error, n)
+	for i := range answers {
+		answers[i] = answer
+	}
+	return answers
 }
 
 // connectedWith returns a connection whose dial has already happened, so
@@ -58,60 +77,65 @@ func connectedWith(t *testing.T, transport transport) *NamenodeConnection {
 	}
 }
 
-func shortRetriableBackoff(t *testing.T, retries int) {
+func shortRetries(t *testing.T, retriable, subtreeLocked int) {
 	initial, max, limit := retriableInitialBackoff, retriableMaxBackoff, retriableMaxRetries
-	retriableInitialBackoff, retriableMaxBackoff, retriableMaxRetries = time.Millisecond, 4*time.Millisecond, retries
-	t.Cleanup(func() { retriableInitialBackoff, retriableMaxBackoff, retriableMaxRetries = initial, max, limit })
+	lockedMax, lockedLimit := subtreeLockedMaxBackoff, subtreeLockedMaxRetries
+	retriableInitialBackoff, retriableMaxBackoff, retriableMaxRetries = time.Millisecond, 4*time.Millisecond, retriable
+	subtreeLockedMaxBackoff, subtreeLockedMaxRetries = 4*time.Millisecond, subtreeLocked
+	t.Cleanup(func() {
+		retriableInitialBackoff, retriableMaxBackoff, retriableMaxRetries = initial, max, limit
+		subtreeLockedMaxBackoff, subtreeLockedMaxRetries = lockedMax, lockedLimit
+	})
 }
 
-func TestExecuteRetriesARetriableExceptionUntilItSucceeds(t *testing.T) {
-	shortRetriableBackoff(t, 10)
-	transport := &answeringTransport{answers: []error{
-		namenodeError(retriableExceptionClass),
-		namenodeError(retriableExceptionClass),
-		namenodeError(retriableExceptionClass),
-		nil,
-	}}
+func execute(c *NamenodeConnection) error {
+	return c.Execute("getFileInfo", &hadoop.RpcRequestHeaderProto{}, &hadoop.RpcResponseHeaderProto{})
+}
+
+func TestExecuteRetriesASubtreeLockUntilItSucceeds(t *testing.T) {
+	shortRetries(t, 1, 10)
+	transport := &answeringTransport{answers: append(repeat(subtreeLocked(), 3), nil)}
 	c := connectedWith(t, transport)
 
-	err := c.Execute("getFileInfo", &hadoop.RpcRequestHeaderProto{}, &hadoop.RpcResponseHeaderProto{})
-
-	require.NoError(t, err)
+	require.NoError(t, execute(c))
 	assert.Equal(t, []int32{1, 2, 3, 4}, transport.requestIDs, "every attempt carries a new call id")
 	assert.NotNil(t, c.conn, "the connection stays open across the retries")
 	assert.Nil(t, c.host.lastError, "a retriable answer is not a host failure")
 }
 
-func TestExecuteGivesUpOnARetriableExceptionAfterTheRetries(t *testing.T) {
-	shortRetriableBackoff(t, 3)
-	always := make([]error, 100)
-	for i := range always {
-		always[i] = namenodeError(retriableExceptionClass)
-	}
-	transport := &answeringTransport{answers: always}
+func TestExecuteGivesUpOnASubtreeLockAfterItsRetries(t *testing.T) {
+	shortRetries(t, 1, 3)
+	transport := &answeringTransport{answers: repeat(subtreeLocked(), 100)}
 	c := connectedWith(t, transport)
 
-	err := c.Execute("getFileInfo", &hadoop.RpcRequestHeaderProto{}, &hadoop.RpcResponseHeaderProto{})
+	err := execute(c)
 
 	require.Error(t, err)
 	nerr, ok := err.(*NamenodeError)
 	require.True(t, ok, "the namenode's own exception is returned, not a wrapped one")
 	assert.Equal(t, retriableExceptionClass, nerr.exception)
-	assert.Len(t, transport.requestIDs, 4, "the first attempt plus three retries")
+	assert.Len(t, transport.requestIDs, 4, "the first attempt plus the subtree lock's three retries")
 	assert.NotNil(t, c.conn)
 }
 
+func TestExecuteGivesOtherRetriableExceptionsTheShorterBudget(t *testing.T) {
+	shortRetries(t, 2, 5)
+	transport := &answeringTransport{answers: repeat(notStarted(), 100)}
+	c := connectedWith(t, transport)
+
+	require.Error(t, execute(c))
+	assert.Len(t, transport.requestIDs, 3, "the first attempt plus two retries, not the subtree lock's five")
+}
+
 func TestExecuteReturnsOtherNamenodeExceptionsAtOnce(t *testing.T) {
-	shortRetriableBackoff(t, 10)
+	shortRetries(t, 10, 10)
 	transport := &answeringTransport{answers: []error{
-		namenodeError("java.io.FileNotFoundException"),
+		namenodeError("java.io.FileNotFoundException", "File does not exist: /a"),
 		nil,
 	}}
 	c := connectedWith(t, transport)
 
-	err := c.Execute("getFileInfo", &hadoop.RpcRequestHeaderProto{}, &hadoop.RpcResponseHeaderProto{})
-
-	require.Error(t, err)
+	require.Error(t, execute(c))
 	assert.Equal(t, []int32{1}, transport.requestIDs, "no retry")
 	assert.NotNil(t, c.conn, "the connection is kept: the namenode answered")
 }

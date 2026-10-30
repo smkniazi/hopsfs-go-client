@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,25 +31,35 @@ const (
 	protocolClassVersion       = 1
 	handshakeCallID            = -3
 	standbyExceptionClass      = "org.apache.hadoop.ipc.StandbyException"
-	retriableExceptionClass    = "org.apache.hadoop.ipc.RetriableException"
+)
+
+// HopsFS throws its subtree lock as the cause of a RetriableException, so the
+// wire class stays RetriableException for older clients and the message
+// starts with SubtreeLockedException's name followed by a colon.
+const (
+	retriableExceptionClass     = "org.apache.hadoop.ipc.RetriableException"
+	subtreeLockedExceptionClass = "org.apache.hadoop.ipc.SubtreeLockedException"
 )
 
 // leaseRenewInterval is a variable so tests can shorten it.
 var leaseRenewInterval = 1 * time.Second
 
-// Retries of a request the namenode answered with RetriableException, the
-// shape of the Java client's dfs.client.retry.max.attempts: the number of
-// retries, the first wait and the cap of the doubling waits. Thirty retries
-// from 1 s to 60 s span 19 to 31 minutes with the jitter, past both limits
-// at which the NameNode's MDCleaner reclaims a subtree lock: 10 minutes for
-// a dead NameNode's (dfs.subtree.clean.failed.ops.locks.delay) and 15 for a
-// live NameNode's slow operation (dfs.subtree.clean.slow.ops.locks.delay),
-// so a lock that outlives its operation does not fail the request.
-// Variables so tests can shorten them.
+// Retries of a request the namenode answered with RetriableException: the
+// first wait, then per kind the number of retries and the cap of the doubling
+// waits. Ten retries capped at 15 s take 80 to 130 s with the jitter, the
+// span of the Java client's dfs.client.retry.max.attempts. A subtree lock
+// gets thirty retries capped at 60 s, 19 to 31 minutes, past both limits at
+// which the NameNode's MDCleaner reclaims a lock: 10 minutes for a dead
+// NameNode's (dfs.subtree.clean.failed.ops.locks.delay) and 15 for a live
+// NameNode's slow operation (dfs.subtree.clean.slow.ops.locks.delay), so a
+// lock that outlives its operation does not fail the request. Variables so
+// tests can shorten them.
 var (
-	retriableMaxRetries     = 30
 	retriableInitialBackoff = 1 * time.Second
-	retriableMaxBackoff     = 60 * time.Second
+	retriableMaxRetries     = 10
+	retriableMaxBackoff     = 15 * time.Second
+	subtreeLockedMaxRetries = 30
+	subtreeLockedMaxBackoff = 60 * time.Second
 )
 
 const (
@@ -321,10 +332,10 @@ func jitter(d time.Duration) time.Duration {
 // unmarshaling the result into resp.
 //
 // A RetriableException from the namenode is retried here with exponential
-// backoff, retriableMaxRetries times. HopsFS throws it for a request that
-// resolves a path under a subtree operation (a directory chmod holds the
-// lock for milliseconds, a large move or delete for minutes) and expects the
-// client to retry, as Hadoop's Java client does.
+// backoff, as Hadoop's Java client does. One that wraps a subtree lock, a
+// request resolving a path under a subtree operation (a directory chmod holds
+// the lock for milliseconds, a large move or delete for minutes), gets the
+// longer budget.
 func (c *NamenodeConnection) Execute(method string, req proto.Message, resp proto.Message) error {
 	c.reqLock.Lock()
 	defer c.reqLock.Unlock()
@@ -356,7 +367,11 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 					c.markFailure(err)
 					continue
 				case retriableExceptionClass:
-					if retries >= retriableMaxRetries {
+					maxRetries, maxBackoff := retriableMaxRetries, retriableMaxBackoff
+					if strings.HasPrefix(nerr.message, subtreeLockedExceptionClass+":") {
+						maxRetries, maxBackoff = subtreeLockedMaxRetries, subtreeLockedMaxBackoff
+					}
+					if retries >= maxRetries {
 						return err
 					}
 					retries++
@@ -364,8 +379,8 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 					c.reqLock.Unlock()
 					time.Sleep(jitter(backoff))
 					c.reqLock.Lock()
-					if backoff *= 2; backoff > retriableMaxBackoff {
-						backoff = retriableMaxBackoff
+					if backoff *= 2; backoff > maxBackoff {
+						backoff = maxBackoff
 					}
 					continue
 				}
