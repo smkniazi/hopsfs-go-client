@@ -57,7 +57,7 @@ func unwrapHopsFSException(err error) string {
 
 		if strings.HasPrefix(exception, javaIOException) {
 			if strings.HasPrefix(message, fileNotFoundException) {
-				return fileAlreadyExistsException
+				return fileNotFoundException
 			} else if strings.HasPrefix(message, permissionDeniedException) {
 				return permissionDeniedException
 			} else if strings.HasPrefix(message, pathIsNotEmptyDirException) {
@@ -82,8 +82,6 @@ func unwrapHopsFSException(err error) string {
 				return notReplicatedYetException
 			} else if strings.HasPrefix(message, illegalArgumentException) {
 				return illegalArgumentException
-			} else if strings.HasPrefix(message, notALeaderException) {
-				return notALeaderException
 			} else if strings.HasPrefix(message, notALeaderException) {
 				return notALeaderException
 			}
