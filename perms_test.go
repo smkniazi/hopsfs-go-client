@@ -54,6 +54,60 @@ func TestChmodWithoutPermission(t *testing.T) {
 	assertPathError(t, err, "chmod", "/_test/accessdenied", os.ErrPermission)
 }
 
+func TestCheckAccess(t *testing.T) {
+	client := getClient(t)
+
+	touchMask(t, "/_test/tocheckaccess", 0600)
+
+	require.NoError(t, client.CheckAccess("/_test/tocheckaccess", 0o4))
+	require.NoError(t, client.CheckAccess("/_test/tocheckaccess", 0o6))
+}
+
+func TestCheckAccessDir(t *testing.T) {
+	client := getClient(t)
+
+	mkdirpMask(t, "/_test/dirtocheckaccess", 0700)
+
+	require.NoError(t, client.CheckAccess("/_test/dirtocheckaccess", 0o5))
+}
+
+func TestCheckAccessWithoutPermission(t *testing.T) {
+	client2 := getClientForUser(t, "gohdfs2")
+
+	touchMask(t, "/_test/tocheckaccessdenied", 0600)
+
+	err := client2.CheckAccess("/_test/tocheckaccessdenied", 0o4)
+	assertPathError(t, err, "check access", "/_test/tocheckaccessdenied", os.ErrPermission)
+}
+
+func TestCheckAccessAfterChmod(t *testing.T) {
+	client := getClient(t)
+
+	touchMask(t, "/_test/tocheckaccessrevoked", 0600)
+	require.NoError(t, client.CheckAccess("/_test/tocheckaccessrevoked", 0o4))
+
+	require.NoError(t, client.Chmod("/_test/tocheckaccessrevoked", 0200))
+
+	err := client.CheckAccess("/_test/tocheckaccessrevoked", 0o4)
+	assertPathError(t, err, "check access", "/_test/tocheckaccessrevoked", os.ErrPermission)
+}
+
+func TestCheckAccessNonexistent(t *testing.T) {
+	client := getClient(t)
+
+	baleet(t, "/_test/nonexistent")
+
+	err := client.CheckAccess("/_test/nonexistent", 0o4)
+	assertPathError(t, err, "check access", "/_test/nonexistent", os.ErrNotExist)
+}
+
+func TestCheckAccessInvalidMode(t *testing.T) {
+	client := getClient(t)
+
+	err := client.CheckAccess("/_test/nonexistent", 0o10)
+	assertPathError(t, err, "check access", "/_test/nonexistent", os.ErrInvalid)
+}
+
 func TestChown(t *testing.T) {
 	superClient := getClientForSuperUser(t)
 
