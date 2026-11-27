@@ -39,6 +39,10 @@ const (
 const (
 	retriableExceptionClass     = "org.apache.hadoop.ipc.RetriableException"
 	subtreeLockedExceptionClass = "org.apache.hadoop.ipc.SubtreeLockedException"
+	// HopsFS marks a subtree lock held by the very call it refuses: the call's
+	// first attempt still runs on the namenode, and its answer will be in the
+	// namenode's retry cache when it ends.
+	subtreeLockedByThisCallPrefix = subtreeLockedExceptionClass + ": [held by this call]"
 )
 
 // leaseRenewInterval is a variable so tests can shorten it.
@@ -49,10 +53,11 @@ var leaseRenewInterval = 1 * time.Second
 // waits. Ten retries capped at 15 s wait 105 s before the jitter, 79 to 131 s
 // with it, the backoff of the Java client's dfs.client.retry.max.attempts. A
 // subtree lock gets thirty retries capped at 60 s, 19 to 31 minutes, past
-// both limits at which the NameNode's MDCleaner reclaims a lock: 10 minutes
-// for a dead NameNode's (dfs.subtree.clean.failed.ops.locks.delay) and 15
-// for a live NameNode's slow operation
-// (dfs.subtree.clean.slow.ops.locks.delay.key), so a lock that outlives its
+// every limit at which the NameNode's MDCleaner reclaims a lock: 10 minutes
+// for a dead NameNode's (dfs.subtree.clean.failed.ops.locks.delay), 15 for a
+// live NameNode's quota recalculation
+// (dfs.subtree.clean.slow.ops.locks.delay.key) and 5 without progress for its
+// other operations (dfs.subtree.stall.timeout), so a lock that outlives its
 // operation does not fail the request. Variables so tests can shorten them.
 var (
 	retriableInitialBackoff = 1 * time.Second
@@ -60,6 +65,10 @@ var (
 	retriableMaxBackoff     = 15 * time.Second
 	subtreeLockedMaxRetries = 30
 	subtreeLockedMaxBackoff = 60 * time.Second
+	// A subtree lock held by this call is waited out without a retry count:
+	// the operation holds it for as long as it makes progress, which can be
+	// hours. This bounds the wait.
+	subtreeLockedByThisCallMaxWait = 24 * time.Hour
 )
 
 const (
@@ -334,8 +343,10 @@ func jitter(d time.Duration) time.Duration {
 // A RetriableException from the namenode is retried here with exponential
 // backoff, as Hadoop's Java client does. One that wraps a subtree lock, a
 // request resolving a path under a subtree operation (a directory delete or
-// move holds the lock for as long as it runs), gets the longer budget. A
-// Close during a wait ends the retries with the last exception.
+// move holds the lock for as long as it runs), gets the longer budget, and one
+// the namenode marks as held by this same call waits without a count, up to
+// subtreeLockedByThisCallMaxWait. A Close during a wait ends the retries with
+// the last exception.
 func (c *NamenodeConnection) Execute(method string, req proto.Message, resp proto.Message) error {
 	c.reqLock.Lock()
 	defer c.reqLock.Unlock()
@@ -348,6 +359,7 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 	epoch := getRpcEpochSec()
 
 	retries, subtreeLockWaits := 0, 0
+	var waitingForOwnLockSince time.Time
 	backoff := retriableInitialBackoff
 	for {
 		err := c.resolveConnection()
@@ -370,6 +382,22 @@ func (c *NamenodeConnection) Execute(method string, req proto.Message, resp prot
 					c.markFailure(err)
 					continue
 				case retriableExceptionClass:
+					if strings.HasPrefix(nerr.message, subtreeLockedByThisCallPrefix) {
+						if waitingForOwnLockSince.IsZero() {
+							waitingForOwnLockSince = time.Now()
+						}
+						if time.Since(waitingForOwnLockSince) >= subtreeLockedByThisCallMaxWait {
+							return err
+						}
+						if backoff > subtreeLockedMaxBackoff {
+							backoff = subtreeLockedMaxBackoff
+						}
+						if !c.waitToRetry(jitter(backoff)) {
+							return err
+						}
+						backoff *= 2
+						continue
+					}
 					// Each kind has its own count, so a long subtree lock wait
 					// does not use up the retries of what follows it, nor the
 					// reverse.

@@ -63,6 +63,13 @@ func subtreeLocked() *NamenodeError {
 		subtreeLockedExceptionClass+": The subtree mlruns is locked by Namenode Id: 1. Active Namenodes are: [1]\n\tat io.hops.transaction.lock.INodeLock.checkSubtreeLock(INodeLock.java:278)")
 }
 
+// subtreeLockedByThisCall is the refusal the namenode sends a re-sent call
+// whose own first attempt holds the lock.
+func subtreeLockedByThisCall() *NamenodeError {
+	return namenodeError(retriableExceptionClass,
+		subtreeLockedExceptionClass+": [held by this call] The subtree mlruns is locked by Namenode Id: 1. Active Namenodes are: [1]\n\tat io.hops.transaction.lock.INodeLock.checkSubtreeLock(INodeLock.java:290)")
+}
+
 func notStarted() *NamenodeError {
 	return namenodeError(retriableExceptionClass, "NameNode still not started")
 }
@@ -209,4 +216,51 @@ func TestExecuteReturnsOtherNamenodeExceptionsAtOnce(t *testing.T) {
 	require.Error(t, execute(c))
 	assert.Equal(t, []int32{1}, transport.requestIDs, "no retry")
 	assert.NotNil(t, c.conn, "the connection is kept: the namenode answered")
+}
+
+// A refusal marked as held by this call is the call's own first attempt still
+// running on the namenode: it is waited out without counting against the
+// subtree lock's retries.
+func TestExecuteWaitsForALockHeldByThisCallWithoutCountingIt(t *testing.T) {
+	shortRetries(t, 1, 2)
+	transport := &answeringTransport{answers: append(repeat(subtreeLockedByThisCall(), 10), nil)}
+	c := connectedWith(t, transport)
+
+	require.NoError(t, execute(c))
+	assert.Len(t, transport.requestIDs, 11, "ten waits past a budget of two")
+	for _, id := range transport.requestIDs {
+		assert.Equal(t, int32(1), id, "every attempt carries the same call id")
+	}
+}
+
+func TestExecuteGivesUpOnALockHeldByThisCallAtTheTimeCap(t *testing.T) {
+	shortRetries(t, 1, 2)
+	maxWait := subtreeLockedByThisCallMaxWait
+	subtreeLockedByThisCallMaxWait = 50 * time.Millisecond
+	t.Cleanup(func() { subtreeLockedByThisCallMaxWait = maxWait })
+	transport := &answeringTransport{answers: repeat(subtreeLockedByThisCall(), 100000)}
+	c := connectedWith(t, transport)
+
+	started := time.Now()
+	err := execute(c)
+
+	require.Error(t, err)
+	nerr, ok := err.(*NamenodeError)
+	require.True(t, ok)
+	assert.Equal(t, retriableExceptionClass, nerr.exception)
+	assert.GreaterOrEqual(t, time.Since(started), 50*time.Millisecond)
+	assert.Greater(t, len(transport.requestIDs), 3, "more waits than the subtree lock's budget")
+}
+
+// Waits for this call's own lock leave the budget for another caller's lock
+// whole: after them, two waits for another lock are allowed and the third
+// refusal fails the call.
+func TestExecuteKeepsTheBudgetForAnotherCallsLock(t *testing.T) {
+	shortRetries(t, 1, 2)
+	answers := append(repeat(subtreeLockedByThisCall(), 5), repeat(subtreeLocked(), 3)...)
+	transport := &answeringTransport{answers: append(answers, nil)}
+	c := connectedWith(t, transport)
+
+	require.Error(t, execute(c))
+	assert.Len(t, transport.requestIDs, 8, "the first attempt, five own-lock waits and two lock waits")
 }
